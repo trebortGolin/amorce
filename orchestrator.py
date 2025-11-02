@@ -1,174 +1,153 @@
+# --- Amorce Agent Orchestrator (Transport Layer) ---
+# This file handles the Flask API, security (API Key),
+# and task signature verification (Zero-Trust).
+#
+# PHASE 3 FIX (T-3.18):
+# This version now IMPORTS and USES the real AgentClient,
+# removing the internal AgentClientSimulator.
+
 import os
 import json
 import logging
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Any, Optional, Union
+from typing import Callable, Any, Optional
 
 from flask import Flask, request, jsonify
 
-# --- Configuration Globale ---
+# --- CRITICAL FIX (T-3.18) ---
+# We are now importing the REAL "Brain" from the other file.
+from agent_client import AgentClient
+
+# -----------------------------
+
+# --- Global Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- Environment Validation ---
+# The Orchestrator (Transport) only needs to know the AGENT_API_KEY.
+# The AGENT_CLIENT (Brain) will load its own keys (GEMINI_API_KEY, AGENT_PRIVATE_KEY).
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
+if not AGENT_API_KEY:
+    logging.warning("WARNING: AGENT_API_KEY environment variable not set. API will be insecure.")
+    # In a real scenario, you might raise an error:
+    # raise EnvironmentError("AGENT_API_KEY must be set.")
 
 
-# --- Initialisation de l'Agent Client (Simulé) ---
-# Dans un projet réel, agent_client serait importé. Ici, on simule l'interface.
-class AgentClientSimulator:
-    def __init__(self):
-        # The agent_client requires the private key (for signing) and the Gemini key (for the LLM call)
-        # This orchestrator only ensures the variables are present. The client handles the logic.
-        required_vars = ["AGENT_PRIVATE_KEY", "GEMINI_API_KEY"]
-        for var in required_vars:
-            if not os.environ.get(var):
-                logging.error(f"FATAL: Missing required environment variable: {var}")
-                raise EnvironmentError(f"Missing required environment variable: {var}")
-        logging.info("Agent client dependencies checked.")
-
-    def process_chat_turn(self, user_input: str, conversation_state: dict) -> dict:
-        """Simulates the agent client processing the NLU and generating a signed task."""
-        # This is where the actual LLM call and signing logic (from agent_client.py) would be.
-        # For the orchestrator, we return a mock signed response for demonstration purposes.
-        # Note: The real implementation must generate a valid Ed25519 signature.
-
-        # Simulating a basic task response
-        task_data = {
-            "task_name": "CHAT_TURN",
-            "message": "Acknowledged. The service is running on ATP SDK v2.0.",
-            "agent_id": AGENT_MANIFEST.get('agent_id')
-        }
-
-        mock_signed_response = {
-            "new_state": conversation_state,
-            "response_text": "I am unable to process that specific request at this time, but I am online and ready.",
-            "signed_task": {
-                "task": task_data,
-                "signature": "mock_signature_for_amorce_io_default_agent",
-                "algorithm": "Ed25519"
-            }
-        }
-        return mock_signed_response
-
-    def get_manifest(self) -> dict:
-        """Returns the full agent manifest."""
-        return AGENT_MANIFEST
-
-
-# --- Fonctions de Chargement et de Sécurité ---
-
+# --- Manifest Loading ---
 def load_agent_manifest() -> dict:
     """
-    Loads the agent manifest file and performs basic integrity checks.
-    Phase 2 Compliance: Checks for the 'agent_id' field.
+    Loads the agent's public contract (manifest) from the JSON file.
+    This uses pathlib for robust path handling.
     """
     try:
+        # Use Path(__file__) to find the manifest in the same directory
         manifest_path = Path(__file__).parent / "agent-manifest.json"
-        if not manifest_path.exists():
-            logging.error("FATAL: agent-manifest.json not found in the application root.")
-            raise FileNotFoundError(f"Manifest not found at {manifest_path}")
-
         with manifest_path.open('r', encoding='utf-8') as f:
-            manifest = json.load(f)
+            manifest_data = json.load(f)
 
-        # Validation for Phase 2: Check for the required 'agent_id' field
-        if "agent_id" not in manifest:
-            logging.error("Manifest missing required 'agent_id' field. Phase 2 compliance failed.")
-            raise ValueError("Manifest is invalid: Missing 'agent_id'.")
+        # Log success and the (new) Agent ID
+        logging.info(f"Manifest loaded successfully. Agent ID: {manifest_data.get('agent_id')}")
+        return manifest_data
 
-        logging.info(f"Manifest loaded successfully. Agent ID: {manifest.get('agent_id')}")
-        return manifest
-
-    except json.JSONDecodeError as e:
-        logging.error(f"Error parsing agent-manifest.json: {e}")
+    except FileNotFoundError:
+        logging.error("FATAL: agent-manifest.json not found.")
+        raise
+    except json.JSONDecodeError:
+        logging.error("FATAL: agent-manifest.json is not valid JSON.")
+        raise
+    except Exception as e:
+        logging.error(f"FATAL: An unexpected error occurred loading manifest: {e}")
         raise
 
 
-def require_api_key(f: Callable) -> Callable:
+# --- Security Decorators (API Key Auth) ---
+
+def require_api_key(f: Callable[..., Any]) -> Callable[..., Any]:
     """
-    Decorateur de sécurité Zero-Trust. Vérifie la présence et la validité de AGENT_API_KEY.
+    Decorator to enforce API Key authentication.
+    Compares the key from 'X-ATP-Key' header with the env variable.
     """
 
     @wraps(f)
-    def decorated_function(*args: Any, **kwargs: Any) -> Union[Any, tuple[Any, int]]:
+    def decorated_function(*args, **kwargs):
+        # Allow missing key if AGENT_API_KEY is not set (for local dev/testing)
         if not AGENT_API_KEY:
-            logging.error("FATAL: AGENT_API_KEY is not set in environment.")
-            return jsonify({"error": "Server misconfiguration"}), 500
+            logging.warning("API key check skipped (AGENT_API_KEY not set).")
+            return f(*args, **kwargs)
 
-        provided_key = request.headers.get('X-ATP-Key')
-
-        if not provided_key or provided_key != AGENT_API_KEY:
-            logging.warning(f"Unauthorized access attempt. Key provided: {provided_key}")
-            # Renvoyer 403 Forbidden est plus sûr pour les tentatives d'accès non autorisées avec une clé invalide
-            return jsonify({"error": "Unauthorized"}), 403
+        key = request.headers.get('X-ATP-Key')
+        if not key or key != AGENT_API_KEY:
+            logging.warning(f"Unauthorized: Invalid API Key received from {request.remote_addr}.")
+            return jsonify({"error": "Unauthorized"}), 401
 
         return f(*args, **kwargs)
 
     return decorated_function
 
 
-# --- Initialisation de l'Application ---
+# --- Flask App Initialization ---
+
+app = Flask(__name__)
+
+# Load the manifest globally on startup
+AGENT_MANIFEST = load_agent_manifest()
+
+# --- CRITICAL FIX (T-3.18) ---
+# Initialize the REAL AgentClient (the "Brain")
+# This line is now CRITICAL. When the app starts, this __init__
+# will run, which triggers the _register_with_trust_directory() call.
 try:
-    # Charger le manifeste avant de démarrer l'application
-    AGENT_MANIFEST = load_agent_manifest()
-    AGENT_CLIENT = AgentClientSimulator()
-    app = Flask(__name__)
-    logging.info("Flask Application and Agent Client initialized.")
-except (FileNotFoundError, ValueError, EnvironmentError):
-    logging.critical("Application failed to initialize due to configuration error.")
-    # Si la configuration échoue, l'application ne doit pas démarrer.
-    AGENT_MANIFEST = {}
-    AGENT_CLIENT = None
-    app = Flask(__name__)
+    AGENT_CLIENT = AgentClient()
+    logging.info("Flask Application and REAL Agent Client initialized.")
+except Exception as e:
+    logging.critical(f"Failed to initialize AgentClient: {e}")
+    # We must stop the app if the client fails to init (e.g., missing keys)
+    raise
 
 
-    # Route pour indiquer l'échec de la configuration si le serveur démarre quand même
-    @app.route('/', defaults={'path': ''}, methods=['GET', 'POST', 'PUT', 'DELETE'])
-    @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
-    def fatal_error_route(path: str) -> tuple[Any, int]:
-        return jsonify({"error": "Service not configured correctly. Check server logs."}), 500
-
-    # Sortir ici si possible dans un environnement de production (ex: Cloud Run)
-    # Dans Flask local, on laisse la route d'erreur
-
-
-# --- Routes d'Application ---
+# --- API Endpoints ---
 
 @app.route('/manifest', methods=['GET'])
 @require_api_key
-def get_manifest_route() -> tuple[Any, int]:
-    """Route pour que l'orchestrateur obtienne le manifeste public."""
-    return jsonify(AGENT_MANIFEST), 200
+def get_manifest():
+    """
+    Serves the agent's public manifest (agent-manifest.json).
+    This allows orchestrators to discover capabilities and trust info.
+    """
+    return jsonify(AGENT_MANIFEST)
 
 
 @app.route('/chat_turn', methods=['POST'])
 @require_api_key
-def chat_turn_route() -> tuple[Any, int]:
+def handle_chat_turn():
     """
-    Route principale pour le traitement du tour de conversation (NLU).
-    Reçoit le user_input et l'état de la conversation.
+    The main conversational endpoint.
+    It receives user input and state, passes it to the "Brain"
+    (AgentClient), and returns the "Brain's" signed response.
     """
-    if not request.is_json:
-        return jsonify({"error": "Missing JSON in request"}), 400
-
-    data = request.get_json()
-    user_input = data.get('user_input')
-    conversation_state = data.get('conversation_state', {})
-
-    if not user_input:
-        return jsonify({"error": "Missing 'user_input' field"}), 400
-
     try:
-        # Déléguer le traitement au AgentClient (le cerveau)
-        response = AGENT_CLIENT.process_chat_turn(user_input, conversation_state)
-        return jsonify(response), 200
+        data = request.json
+        if not data or 'user_input' not in data:
+            return jsonify({"error": "Invalid request: 'user_input' is required."}), 400
+
+        user_input = data.get('user_input')
+        conversation_state = data.get('conversation_state', {})
+
+        # Pass the request to the REAL AgentClient
+        response_data = AGENT_CLIENT.process_chat_turn(user_input, conversation_state)
+
+        return jsonify(response_data)
+
     except Exception as e:
-        logging.error(f"Error processing chat turn: {e}")
-        return jsonify({"error": "Internal Agent Error", "details": str(e)}), 500
+        logging.error(f"Error in /chat_turn: {e}", exc_info=True)
+        return jsonify({"error": "Internal Server Error"}), 500
 
 
-# --- Point d'Entrée (Pour le développement local) ---
+# --- Application Runner ---
 if __name__ == '__main__':
-    # Cloud Run/Gunicorn/autres serveurs WSGI ne passent pas par ici.
-    # Pour le développement local Uvicorn ou Flask natif:
-    logging.warning("Running Flask in development mode. Use a proper WSGI server in production.")
+    # This block is for local development (e.g., `python orchestrator.py`)
+    # It is NOT used by the Dockerfile's `flask run` command.
+    logging.info("Running in local development mode...")
     app.run(host='0.0.0.0', port=5000)
+
