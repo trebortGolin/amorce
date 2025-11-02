@@ -1,51 +1,33 @@
 {
-  "schema_version": "v3.0-zt (Zero-Trust)",
-  "display_name": "Agnostic Travel Specialist",
-  "namespace": "atp_travel_agent",
-  "description": "A specialist agent that can search and book flights and hotels. Implements ATP SDK v1.0 Zero-Trust protocol.",
-  "api_endpoint": "\"api_endpoint\": \"https://api.amorce.io\",",
-  "authentication": {
-    "type": "API_Key",
-    "header_name": "X-ATP-Key",
-    "instructions": "The Orchestrator's API Key must be provided in the 'X-ATP-Key' header for all requests."
+  "protocol_version": "3.3",
+  "agent_id": "amorce.io/default",
+  "metadata": {
+    "name": "amorce Zero-Trust Specialist Agent",
+    "description": "The reference implementation for the Agnostic Transaction Protocol (ATP), offering secure, signed task execution via a Gemini-powered specialist.",
+    "creator": "Trebort Golin",
+    "supported_languages": ["en", "fr"],
+    "api_endpoint": "https://api.amorce.io"
   },
   "trust": {
-    "public_key_format": "PEM",
-    "signature_algorithm": "Ed25519",
-    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFwW4eANJVcRulMHNmo1+KE+H3dJR9HgrFzfLcKX1R8w=\n-----END PUBLIC KEY-----\n"
+    "algorithm": "Ed25519",
+    "identity_reference": "amorce.io/default"
   },
-  "capabilities": [
+  "intents": [
     {
-      "intent": "SEARCH_FLIGHT",
-      "description": "Searches for one-way flights.",
-      "parameters": [
-        {"name": "origin", "type": "string", "required": true},
-        {"name": "destination", "type": "string", "required": true},
-        {"name": "departure_date", "type": "string", "format": "YYYY-MM-DD", "required": true}
-      ],
-      "task_name": "GOOGLE_SEARCH_FLIGHT",
-      "secure_task": false
+      "name": "GET_MANIFEST",
+      "description": "Returns the agent's full capabilities and trust information (this manifest itself)."
     },
     {
-      "intent": "SEARCH_HOTEL",
-      "description": "Searches for hotels in a location.",
-      "parameters": [
-        {"name": "location", "type": "string", "required": true},
-        {"name": "check_in_date", "type": "string", "format": "YYYY-MM-DD", "required": true},
-        {"name": "check_out_date", "type": "string", "format": "YYYY-MM-DD", "required": true}
-      ],
-      "task_name": "GOOGLE_SEARCH_HOTEL",
-      "secure_task": false
+      "name": "CHAT_TURN",
+      "description": "Drives the main conversational turn, processes user input, and maintains the state."
     },
     {
-      "intent": "BOOK_ITEM",
-      "description": "Books a previously found flight or hotel item. Requires user Authorization.",
-      "parameters": [
-        {"name": "item_id", "type": "string", "required": true, "context": "booking_context.item_to_book.id"},
-        {"name": "price", "type": "number", "required": true, "context": "booking_context.item_to_book.price"}
-      ],
-      "task_name": "BOOK_FLIGHT | BOOK_HOTEL",
-      "secure_task": true
+      "name": "SEARCH_FLIGHT",
+      "description": "A specific action for searching for flights based on provided parameters (example intent)."
+    },
+    {
+      "name": "BOOK_FLIGHT",
+      "description": "A specific action to book a flight based on parameters extracted from the conversation (example intent)."
     }
   ]
 }
