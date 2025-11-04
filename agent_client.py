@@ -118,7 +118,7 @@ class AgentClient:
 
             nlg_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
             self.llm_nlg = genai.GenerativeModel(
-                model_name="gemini-pro", # Using a stable model
+                model_name="gemini-2.5-pro", # Using a stable model
                 system_instruction=NLG_SYSTEM_PROMPT
             )
             logging.info("Gemini NLU and NLG models initialized successfully.")
