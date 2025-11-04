@@ -14,6 +14,7 @@ import logging
 import requests
 import base64
 import time
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional
 
