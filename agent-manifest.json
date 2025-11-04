@@ -3,7 +3,7 @@
   "agent_id": "amorce.io/default",
   "metadata": {
     "name": "amorce Zero-Trust Specialist Agent",
-    "description": "The reference implementation for the Agnostic Transaction Protocol (ATP), offering secure, signed task execution via a Gemini-powered specialist.",
+    "description": "The reference implementation for the Agnostic Transaction Protocol (ATP), offering secure, signed task execution for e-commerce.",
     "creator": "Trebort Golin",
     "supported_languages": ["en", "fr"],
     "api_endpoint": "https://api.amorce.io"
@@ -22,12 +22,20 @@
       "description": "Drives the main conversational turn, processes user input, and maintains the state."
     },
     {
-      "name": "SEARCH_FLIGHT",
-      "description": "A specific action for searching for flights based on provided parameters (example intent)."
+      "name": "GET_PRODUCT_CATEGORIES",
+      "description": "Gets a list of all available product categories.",
+      "parameters": []
     },
     {
-      "name": "BOOK_FLIGHT",
-      "description": "A specific action to book a flight based on parameters extracted from the conversation (example intent)."
+      "name": "GET_PRODUCTS_IN_CATEGORY",
+      "description": "Gets a list of products for a specific category.",
+      "parameters": [
+        {
+          "name": "category_name",
+          "type": "string",
+          "description": "The category to search for (e.g., 'electronics', 'jewelery')."
+        }
+      ]
     }
   ]
 }

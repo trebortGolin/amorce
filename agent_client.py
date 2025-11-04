@@ -1,13 +1,11 @@
 """
-Agent Client (The "Brain") - Amorce Project (v1.2 - Real Tasks)
+Agent Client (The "Brain") - Amorce Project (v1.3 - Real API)
 
 This file implements the logic for the agent, including:
-- P-0: Secure registration with the Trust Directory (using DIRECTORY_ADMIN_KEY).
+- P-0: Secure registration with the Trust Directory.
 - P-1: Real LLM calls to Gemini for NLU and NLG.
-- T-5.6 Fix: Added robust error handling to __init__ for Gemini initialization.
-- P-1: Intent routing.
 - P-4: Cryptographic signing of tasks.
-- SPRINT V1.2 (T-6.1): Replacing mock task logic with real API call structure.
+- SPRINT V1.2 (T-6.3): Pivoted to FakeStoreAPI (real 3rd party API call).
 """
 
 import os
@@ -29,9 +27,9 @@ from cryptography.exceptions import InvalidSignature
 # --- Global Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- P-1: LLM System Prompts (from Briefing) ---
+# --- P-1: LLM System Prompts (T-6.3 FakeStore) ---
 NLU_SYSTEM_PROMPT = """
-You are an expert NLU (Natural Language Understanding) agent for a travel agency.
+You are an expert NLU (Natural Language Understanding) agent for an e-commerce store.
 Your sole task is to extract information from the user's request and respond ONLY with a JSON object.
 NEVER add any text before or after the JSON.
 
@@ -40,45 +38,43 @@ You will receive:
 2. "user_input": What the user just said.
 
 Your rules:
-- Identify the user's intent: 'SEARCH_FLIGHT', 'BOOK_FLIGHT', or 'CLARIFICATION'.
-- If the request is a *new* search (e.g., "Find me a flight to Paris"), create a NEW, complete JSON for this intent.
-- If the user provides missing information (e.g., "From Paris", "on Dec 15th"),
-  USE the previous state and ONLY ADD or MODIFY the information provided. The intent should remain the same (e.g., 'SEARCH_FLIGHT').
-- If the user confirms a booking (e.g., "yes", "book it", "confirm"), detect the 'BOOK_FLIGHT' intent.
+- Identify the user's intent: 'GET_PRODUCTS_IN_CATEGORY', 'GET_PRODUCT_CATEGORIES', or 'CLARIFICATION'.
+- If the user asks for products in a specific category (e.g., "show me electronics", "I need jewelery"), detect 'GET_PRODUCTS_IN_CATEGORY' and extract the 'category_name'.
+- If the user asks *what* categories you have, detect 'GET_PRODUCT_CATEGORIES'.
 - If the user input is not clear or is just conversational, use 'CLARIFICATION'.
 
 Output JSON Structure:
 {
-  "intent": "SEARCH_FLIGHT" | "BOOK_FLIGHT" | "CLARIFICATION",
+  "intent": "GET_PRODUCTS_IN_CATEGORY" | "GET_PRODUCT_CATEGORIES" | "CLARIFICATION",
   "parameters": {
-    "origin": "CITY_OR_IATA_CODE" (or null),
-    "destination": "CITY_OR_IATA_CODE" (or null),
-    "departure_date": "YYYY-MM-DD" (or null)
+    "category_name": "string" (or null)
   }
 }
 """
 
 NLG_SYSTEM_PROMPT = """
-You are a conversational, friendly, and helpful travel agent.
+You are a conversational, friendly, and helpful e-commerce assistant.
 Your task is to respond to the user based on the context provided.
 
 - Always be friendly and use a natural, engaging tone.
-- If the NLU result has missing parameters (e.g., 'origin' is null), politely ask for the *one* missing piece of information.
-- If 'task_results' contains successful results (e.g., {"item_id": "AF123", "price": 450.00}):
-    - Present the best result clearly.
-    - ALWAYS finish by asking a confirmation question to book it.
-    - (Example: "I found an Air France flight for 450.00€. Would you like me to book it?")
+- If the NLU result has missing parameters (e.g., for GET_PRODUCTS_IN_CATEGORY), politely ask for the *one* missing piece of information (e.g., "Which category are you interested in?").
+- If 'task_results' contains successful results (e.g., a list of products):
+    - Present the *first* result clearly (title and price).
+    - ALWAYS finish by asking a confirmation question to "book" (add to cart).
+    - (Example: "I found a 'Samsung 4K TV' for $599.99. Would you like me to add it to your cart?")
+- If 'task_results' contains an error (e.g., {"error": "No products found"}):
+    - Apologize and clearly state the error to the user.
 """
 
 class AgentClient:
     """
-    The 'Brain' of the Agent (v1.2).
-    Manages keys, LLM calls, intent routing, and task signing.
+    The 'Brain' of the Agent (v1.3 - FakeStore).
+    Manages keys, LLM calls, intent routing, and real 3rd party API calls.
     """
 
     def __init__(self):
         """Initializes the client and loads Zero-Trust assets."""
-        logging.info("Initializing Agent Client v1.2 (The Brain)...") # v1.2
+        logging.info("Initializing Agent Client v1.3 (FakeStore Brain)...") # v1.3
 
         # --- 1. Load Trust Assets (Keys) ---
         private_key_pem = os.environ.get("AGENT_PRIVATE_KEY")
@@ -146,6 +142,9 @@ class AgentClient:
         else:
             self._register_with_trust_directory()
 
+        # --- 5. (T-6.3) No 3rd Party API Key Needed ---
+        logging.info("FakeStoreAPI selected. No 3rd party API key required.")
+
     def _load_manifest_locally(self) -> Dict[str, Any]:
         """Loads the manifest from disk (used to retrieve the agent_id)."""
         try:
@@ -193,7 +192,13 @@ class AgentClient:
             """
             response = self.llm_nlu.generate_content(prompt)
 
-            json_response = response.text.strip().replace("```json", "").replace("```", "")
+            # Helper to find JSON in mixed-format responses
+            json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if not json_match:
+                logging.error(f"NLU parsing failed: No JSON object found in response. Raw: {response.text}")
+                return {"intent": "CLARIFICATION", "parameters": {}}
+
+            json_response = json_match.group(0)
             nlu_result = json.loads(json_response)
 
             logging.info(f"NLU returned intent: {nlu_result.get('intent')}")
@@ -218,42 +223,36 @@ class AgentClient:
             logging.error(f"NLG call failed: {e}")
             return "I'm sorry, I encountered an error while processing my response." # Fallback
 
-    # --- P-1.B: Task Preparation ---
-    # SPRINT V1.2 (T-6.1) - This is now the entry point for real task logic
+    # --- P-1.B: Task Preparation (T-6.3 FakeStore) ---
 
-    def _prepare_search_task(self, parameters: dict) -> (dict, dict):
-        """Prepares the task data for a SEARCH_FLIGHT intent."""
-        logging.info("Preparing SEARCH_FLIGHT task.")
+    def _prepare_get_category_task(self, parameters: dict) -> (dict, dict):
+        """Prepares the task data for a GET_PRODUCTS_IN_CATEGORY intent."""
+        logging.info("Preparing GET_PRODUCTS_IN_CATEGORY task.")
 
-        # 1. Define the task for the external orchestrator
+        category = parameters.get("category_name")
+        if not category:
+            # This should be caught by NLU/NLG, but as a safeguard:
+            logging.warning("Missing category_name for GET_PRODUCTS_IN_CATEGORY.")
+            task_data = {
+                "task_name": "CLARIFICATION",
+                "agent_id": self.agent_id,
+                "timestamp": int(time.time()),
+                "message": "Category was missing."
+            }
+            return task_data, None
+
+        # 1. Define the task
         task_data = {
-            "task_name": "SEARCH_FLIGHT",
-            "agent_id": self.agent_id,
-            "timestamp": int(time.time()),
-            "parameters": parameters # Pass the NLU parameters (origin, dest, date)
-        }
-
-        # 2. (SPRINT V1.2) Call the real 3rd-party API
-        # This replaces the old mock.
-        task_results = self._call_flight_api(parameters)
-
-        return task_data, task_results
-
-    def _prepare_book_task(self, parameters: dict) -> (dict, dict):
-        """Prepares the task data for a BOOK_FLIGHT intent."""
-        logging.info("Preparing BOOK_FLIGHT task.")
-        task_data = {
-            "task_name": "BOOK_FLIGHT",
+            "task_name": "GET_PRODUCTS_IN_CATEGORY",
             "agent_id": self.agent_id,
             "timestamp": int(time.time()),
             "parameters": parameters
         }
-        # TODO (Sprint v1.2): Call the real booking API
-        mock_task_results = {
-            "status": "BOOKING_CONFIRMED",
-            "confirmation_code": "XYZ789"
-        }
-        return task_data, mock_task_results
+
+        # 2. Call the real 3rd-party API
+        task_results = self._call_fakestore_api(category)
+
+        return task_data, task_results
 
     def _prepare_chat_task(self) -> (dict, dict):
         """Prepares a simple chat response task."""
@@ -266,27 +265,52 @@ class AgentClient:
         }
         return task_data, None
 
-    # --- SPRINT V1.2 (T-6.1): New function for 3rd Party API ---
-    def _call_flight_api(self, parameters: dict) -> dict:
+    # --- SPRINT V1.2 (T-6.3): REAL 3rd Party API Call ---
+    def _call_fakestore_api(self, category: str) -> dict:
         """
-        Simulates calling a real 3rd party API (e.g., Amadeus, Google Flights).
-        This is where the agent's *real* specialized knowledge lives.
+        Calls the real 3rd party API (FakeStoreAPI).
+        This is the agent's *real* specialized knowledge.
         """
-        logging.info(f"Calling 3rd Party Flight API (Simulated) with parameters: {parameters}")
+        logging.info(f"Calling 3rd Party FakeStoreAPI for category: {category}")
 
-        # In a real implementation:
-        # 1. We would need a new secret (e.g., AMADEUS_API_KEY)
-        # 2. We would use 'requests' to call the external API
-        # 3. We would handle errors from that API (e.g., 404, 503)
+        # 1. Build the API Request
+        # Note: The API is sensitive to case and exact spelling.
+        api_url = f"https://fakestoreapi.com/products/category/{category.lower()}"
+        headers = { "Accept": "application/json" }
 
-        # For Sprint v1.2, we just return the same mock data as before,
-        # but it's now correctly isolated from the main logic.
-        mock_task_results = {
-            "results": [
-                {"item_id": "AF123", "price": 450.00, "airline": "Air France"}
-            ]
-        }
-        return mock_task_results
+        try:
+            response = requests.get(api_url, headers=headers, timeout=5)
+
+            if response.status_code != 200:
+                logging.error(f"FakeStoreAPI Error. Status: {response.status_code}, Body: {response.text}")
+                return {"error": "Failed to retrieve product data from the provider."}
+
+            product_data = response.json()
+
+            # 3. Parse the complex response and format it for our agent
+            if not product_data:
+                logging.warning("FakeStoreAPI returned 0 results for this category.")
+                return {"error": f"No products found for category '{category}'."}
+
+            # Get the first product result
+            first_product = product_data[0]
+
+            # Format the results to match what our NLG expects
+            task_results = {
+                "results": [
+                    {
+                        "item_id": first_product.get("id"),
+                        "title": first_product.get("title"),
+                        "price": first_product.get("price")
+                    }
+                ]
+            }
+            return task_results
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"FakeStoreAPI call failed: {e}")
+            return {"error": "Could not connect to the product data provider."}
+
 
     # --- P-4: Real Signing ---
     def _sign_task(self, task_data: Dict[str, Any]) -> str:
@@ -310,7 +334,7 @@ class AgentClient:
         Main function (P-1 Refactor).
         Orchestrates the NLU -> Routing -> Tasking -> NLG flow.
         """
-        logging.info(f"Processing turn v1.2 for Agent ID {self.agent_id}...")
+        logging.info(f"Processing turn v1.3 for Agent ID {self.agent_id}...")
 
         # 1. Call NLU (P-1.A)
         nlu_result = self._call_llm_nlu(user_input, conversation_state)
@@ -322,10 +346,12 @@ class AgentClient:
         task_data = {}
         task_results = None # This is the *result* of the task
 
-        if intent == "SEARCH_FLIGHT":
-            task_data, task_results = self._prepare_search_task(parameters)
-        elif intent == "BOOK_FLIGHT":
-            task_data, task_results = self._prepare_book_task(parameters)
+        if intent == "GET_PRODUCTS_IN_CATEGORY":
+            task_data, task_results = self._prepare_get_category_task(parameters)
+        elif intent == "GET_PRODUCT_CATEGORIES":
+            # TODO (Sprint v1.3): Implement _prepare_get_categories_task
+            logging.warning(f"Intent {intent} not yet implemented. Defaulting to CLARIFICATION.")
+            task_data, task_results = self._prepare_chat_task()
         elif intent == "CLARIFICATION":
             task_data, task_results = self._prepare_chat_task()
         else:
