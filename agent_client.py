@@ -1,5 +1,5 @@
 """
-Agent Client (The "Brain") - Amorce Project (v1.1 - P-0 & P-1)
+Agent Client (The "Brain") - Amorce Project (v1.2 - Real Tasks)
 
 This file implements the logic for the agent, including:
 - P-0: Secure registration with the Trust Directory (using DIRECTORY_ADMIN_KEY).
@@ -7,6 +7,7 @@ This file implements the logic for the agent, including:
 - T-5.6 Fix: Added robust error handling to __init__ for Gemini initialization.
 - P-1: Intent routing.
 - P-4: Cryptographic signing of tasks.
+- SPRINT V1.2 (T-6.1): Replacing mock task logic with real API call structure.
 """
 
 import os
@@ -71,13 +72,13 @@ Your task is to respond to the user based on the context provided.
 
 class AgentClient:
     """
-    The 'Brain' of the Agent (v1.1).
+    The 'Brain' of the Agent (v1.2).
     Manages keys, LLM calls, intent routing, and task signing.
     """
 
     def __init__(self):
         """Initializes the client and loads Zero-Trust assets."""
-        logging.info("Initializing Agent Client v1.1 (The Brain)...")
+        logging.info("Initializing Agent Client v1.2 (The Brain)...") # v1.2
 
         # --- 1. Load Trust Assets (Keys) ---
         private_key_pem = os.environ.get("AGENT_PRIVATE_KEY")
@@ -112,13 +113,13 @@ class AgentClient:
 
             nlu_config = {"temperature": 0.0, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
             self.llm_nlu = genai.GenerativeModel(
-                model_name="gemini-2.5-pro", # Using a stable model
+                model_name="gemini-2.5-pro", # T-5.7 Fix
                 system_instruction=NLU_SYSTEM_PROMPT
             )
 
             nlg_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
             self.llm_nlg = genai.GenerativeModel(
-                model_name="gemini-2.5-pro", # Using a stable model
+                model_name="gemini-2.5-pro", # T-5.7 Fix
                 system_instruction=NLG_SYSTEM_PROMPT
             )
             logging.info("Gemini NLU and NLG models initialized successfully.")
@@ -217,23 +218,26 @@ class AgentClient:
             logging.error(f"NLG call failed: {e}")
             return "I'm sorry, I encountered an error while processing my response." # Fallback
 
-    # --- P-1.B: Task Preparation (Mocked) ---
+    # --- P-1.B: Task Preparation ---
+    # SPRINT V1.2 (T-6.1) - This is now the entry point for real task logic
+
     def _prepare_search_task(self, parameters: dict) -> (dict, dict):
         """Prepares the task data for a SEARCH_FLIGHT intent."""
         logging.info("Preparing SEARCH_FLIGHT task.")
+
+        # 1. Define the task for the external orchestrator
         task_data = {
             "task_name": "SEARCH_FLIGHT",
             "agent_id": self.agent_id,
             "timestamp": int(time.time()),
-            "parameters": parameters
+            "parameters": parameters # Pass the NLU parameters (origin, dest, date)
         }
-        # Simulate task results
-        mock_task_results = {
-            "results": [
-                {"item_id": "AF123", "price": 450.00, "airline": "Air France"}
-            ]
-        }
-        return task_data, mock_task_results
+
+        # 2. (SPRINT V1.2) Call the real 3rd-party API
+        # This replaces the old mock.
+        task_results = self._call_flight_api(parameters)
+
+        return task_data, task_results
 
     def _prepare_book_task(self, parameters: dict) -> (dict, dict):
         """Prepares the task data for a BOOK_FLIGHT intent."""
@@ -244,7 +248,7 @@ class AgentClient:
             "timestamp": int(time.time()),
             "parameters": parameters
         }
-        # Simulate booking
+        # TODO (Sprint v1.2): Call the real booking API
         mock_task_results = {
             "status": "BOOKING_CONFIRMED",
             "confirmation_code": "XYZ789"
@@ -261,6 +265,28 @@ class AgentClient:
             "message": "User needs clarification."
         }
         return task_data, None
+
+    # --- SPRINT V1.2 (T-6.1): New function for 3rd Party API ---
+    def _call_flight_api(self, parameters: dict) -> dict:
+        """
+        Simulates calling a real 3rd party API (e.g., Amadeus, Google Flights).
+        This is where the agent's *real* specialized knowledge lives.
+        """
+        logging.info(f"Calling 3rd Party Flight API (Simulated) with parameters: {parameters}")
+
+        # In a real implementation:
+        # 1. We would need a new secret (e.g., AMADEUS_API_KEY)
+        # 2. We would use 'requests' to call the external API
+        # 3. We would handle errors from that API (e.g., 404, 503)
+
+        # For Sprint v1.2, we just return the same mock data as before,
+        # but it's now correctly isolated from the main logic.
+        mock_task_results = {
+            "results": [
+                {"item_id": "AF123", "price": 450.00, "airline": "Air France"}
+            ]
+        }
+        return mock_task_results
 
     # --- P-4: Real Signing ---
     def _sign_task(self, task_data: Dict[str, Any]) -> str:
@@ -284,7 +310,7 @@ class AgentClient:
         Main function (P-1 Refactor).
         Orchestrates the NLU -> Routing -> Tasking -> NLG flow.
         """
-        logging.info(f"Processing turn v1.1 for Agent ID {self.agent_id}...")
+        logging.info(f"Processing turn v1.2 for Agent ID {self.agent_id}...")
 
         # 1. Call NLU (P-1.A)
         nlu_result = self._call_llm_nlu(user_input, conversation_state)
@@ -310,6 +336,7 @@ class AgentClient:
         signature = self._sign_task(task_data)
 
         # 4. Generate human response (P-1.A)
+        # The NLG brain generates a response based on the NLU intent *and* the task results.
         response_text = self._call_llm_nlg(nlu_result, task_results)
 
         # 5. Construct Final Signed Response (P-4)
@@ -323,3 +350,4 @@ class AgentClient:
             }
         }
         return signed_response
+
