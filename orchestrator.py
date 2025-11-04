@@ -17,7 +17,7 @@ import requests  # <-- PHASE 4 IMPORT
 import base64    # <-- PHASE 4 IMPORT
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Any, Optional
+from typing import Callable, Any, Optional, Dict
 
 # --- PHASE 4: Cryptography Imports for Verification ---
 from cryptography.hazmat.primitives import serialization
