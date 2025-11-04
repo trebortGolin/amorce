@@ -4,6 +4,7 @@ Agent Client (The "Brain") - Amorce Project (v1.1 - P-0 & P-1)
 This file implements the logic for the agent, including:
 - P-0: Secure registration with the Trust Directory (using DIRECTORY_ADMIN_KEY).
 - P-1: Real LLM calls to Gemini for NLU and NLG.
+- T-5.6 Fix: Added robust error handling to __init__ for Gemini initialization.
 - P-1: Intent routing.
 - P-4: Cryptographic signing of tasks.
 """
@@ -17,9 +18,9 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+# --- P-1: LLM Import ---
 import google.generativeai as genai
 
-# Cryptography imports
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
@@ -27,7 +28,7 @@ from cryptography.exceptions import InvalidSignature
 # --- Global Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- P-1: NLU System Prompt (from Briefing) ---
+# --- P-1: LLM System Prompts (from Briefing) ---
 NLU_SYSTEM_PROMPT = """
 You are an expert NLU (Natural Language Understanding) agent for a travel agency.
 Your sole task is to extract information from the user's request and respond ONLY with a JSON object.
@@ -56,7 +57,6 @@ Output JSON Structure:
 }
 """
 
-# --- P-1: NLG System Prompt (from Briefing) ---
 NLG_SYSTEM_PROMPT = """
 You are a conversational, friendly, and helpful travel agent.
 Your task is to respond to the user based on the context provided.
@@ -68,7 +68,6 @@ Your task is to respond to the user based on the context provided.
     - ALWAYS finish by asking a confirmation question to book it.
     - (Example: "I found an Air France flight for 450.00€. Would you like me to book it?")
 """
-
 
 class AgentClient:
     """
@@ -107,15 +106,28 @@ class AgentClient:
             logging.error("FATAL: GEMINI_API_KEY environment variable not set.")
             raise EnvironmentError("GEMINI_API_KEY must be set for LLM access.")
 
-        # Configure Gemini client
-        genai.configure(api_key=self.gemini_api_key)
+        # --- P-1 & T-5.6 FIX: Add error handling for LLM initialization ---
+        try:
+            genai.configure(api_key=self.gemini_api_key)
 
-        # P-1: Initialize NLU and NLG models
-        self.llm_nlu = genai.GenerativeModel(
-            model_name="gemini-pro",  # Using a stable model
-            system_instruction=NLU_SYSTEM_PROMPT
-        )
-        logging.info("Gemini NLU and NLG models initialized.")
+            nlu_config = {"temperature": 0.0, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
+            self.llm_nlu = genai.GenerativeModel(
+                model_name="gemini-pro", # Using a stable model
+                system_instruction=NLU_SYSTEM_PROMPT
+            )
+
+            nlg_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
+            self.llm_nlg = genai.GenerativeModel(
+                model_name="gemini-pro", # Using a stable model
+                system_instruction=NLG_SYSTEM_PROMPT
+            )
+            logging.info("Gemini NLU and NLG models initialized successfully.")
+        except Exception as e:
+            # If this fails (e.g., bad API key, API not enabled),
+            # we must raise an error to stop the container.
+            logging.error(f"FATAL: Failed to initialize Gemini models: {e}")
+            raise EnvironmentError(f"Gemini model initialization failed: {e}")
+        # --- Fin P-1 / T-5.6 ---
 
         # --- 3. Load Manifest and Agent ID (Phase 2) ---
         self.manifest = self._load_manifest_locally()
@@ -124,8 +136,6 @@ class AgentClient:
 
         # --- 4. Load Trust Directory Config (P-0 & P-3) ---
         self.trust_directory_url = os.environ.get("TRUST_DIRECTORY_URL")
-
-        # P-0: Load the *new* Admin Key
         self.directory_admin_key = os.environ.get("DIRECTORY_ADMIN_KEY")
 
         if not self.trust_directory_url:
@@ -153,29 +163,21 @@ class AgentClient:
         logging.info(f"Registering agent {self.agent_id} with Trust Directory at {self.trust_directory_url}...")
 
         endpoint = f"{self.trust_directory_url}/api/v1/register"
-
         payload = {
             "agent_id": self.agent_id,
             "public_key": self.agent_public_key_pem,
             "algorithm": "Ed25519"
         }
-
-        # P-0: Add the required Admin Key to the header
-        headers = {
-            "X-Admin-Key": self.directory_admin_key
-        }
+        headers = { "X-Admin-Key": self.directory_admin_key }
 
         try:
             response = requests.post(endpoint, json=payload, headers=headers, timeout=5)
-
             if response.status_code == 200 or response.status_code == 201:
                 logging.info(
                     f"Successfully registered/updated identity: {response.json().get('message')}")
             else:
-                # Log the error if registration fails (e.g., 401 Unauthorized)
                 logging.error(
                     f"Failed to register with Trust Directory. Status: {response.status_code}, Body: {response.text}")
-
         except requests.exceptions.RequestException as e:
             logging.error(f"Could not connect to Trust Directory at {endpoint}: {e}")
 
@@ -190,16 +192,14 @@ class AgentClient:
             """
             response = self.llm_nlu.generate_content(prompt)
 
-            # Clean the JSON response
             json_response = response.text.strip().replace("```json", "").replace("```", "")
             nlu_result = json.loads(json_response)
 
             logging.info(f"NLU returned intent: {nlu_result.get('intent')}")
             return nlu_result
         except Exception as e:
-            logging.error(
-                f"NLU parsing failed: {e}. Raw response: {response.text if 'response' in locals() else 'N/A'}")
-            return {"intent": "CLARIFICATION", "parameters": {}}  # Fallback
+            logging.error(f"NLU parsing failed: {e}. Raw response: {response.text if 'response' in locals() else 'N/A'}")
+            return {"intent": "CLARIFICATION", "parameters": {}} # Fallback
 
     # --- P-1.A: NLG Call ---
     def _call_llm_nlg(self, nlu_result: dict, task_results: Optional[dict] = None) -> str:
@@ -215,7 +215,7 @@ class AgentClient:
             return response.text.strip()
         except Exception as e:
             logging.error(f"NLG call failed: {e}")
-            return "I'm sorry, I encountered an error while processing my response."  # Fallback
+            return "I'm sorry, I encountered an error while processing my response." # Fallback
 
     # --- P-1.B: Task Preparation (Mocked) ---
     def _prepare_search_task(self, parameters: dict) -> (dict, dict):
@@ -227,8 +227,7 @@ class AgentClient:
             "timestamp": int(time.time()),
             "parameters": parameters
         }
-        # In a real SDK, this would be an external API call.
-        # For P-1, we *simulate* the task result as per the brief.
+        # Simulate task results
         mock_task_results = {
             "results": [
                 {"item_id": "AF123", "price": 450.00, "airline": "Air France"}
@@ -261,7 +260,6 @@ class AgentClient:
             "timestamp": int(time.time()),
             "message": "User needs clarification."
         }
-        # No external task results for a clarification
         return task_data, None
 
     # --- P-4: Real Signing ---
@@ -296,7 +294,7 @@ class AgentClient:
         parameters = nlu_result.get("parameters", {})
 
         task_data = {}
-        task_results = None  # This is the *result* of the task
+        task_results = None # This is the *result* of the task
 
         if intent == "SEARCH_FLIGHT":
             task_data, task_results = self._prepare_search_task(parameters)
@@ -312,12 +310,11 @@ class AgentClient:
         signature = self._sign_task(task_data)
 
         # 4. Generate human response (P-1.A)
-        # The NLG brain generates a response based on the *results* of the task.
         response_text = self._call_llm_nlg(nlu_result, task_results)
 
         # 5. Construct Final Signed Response (P-4)
         signed_response = {
-            "new_state": nlu_result,  # The NLU result becomes the new state
+            "new_state": nlu_result, # The NLU result becomes the new state
             "response_text": response_text,
             "signed_task": {
                 "task": task_data,
@@ -326,4 +323,3 @@ class AgentClient:
             }
         }
         return signed_response
-
