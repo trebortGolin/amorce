@@ -1,10 +1,6 @@
-# --- ORCHESTRATOR (Amorce P-1) ---
-# This is the corrected server for testing P-0 and P-1.
-# It exposes the correct endpoint (/v1/agent/invoke) and
-# implements Athéna's P-1 requirement: an in-memory cache
-# for public key verification.
-# testing deployment
+# --- ORCHESTRATOR (Amorce P-3) ---
 # v1.1 (Security): Added @require_api_key decorator for production security.
+# v1.2 (P-3): Added /v1/a2a/transact endpoint for A2A negotiation.
 
 import os
 import json
@@ -12,6 +8,8 @@ import logging
 import requests
 import base64
 import time
+from datetime import datetime  # P-3 Import
+from uuid import uuid4         # P-3 Import
 from functools import wraps
 from typing import Callable, Any, Optional, Dict
 
@@ -92,15 +90,8 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
 
     # 2. If not in cache or stale, fetch from Trust Directory
     #    This endpoint matches the main.py of amorce-trust-directory
-    #    The client (orchestrator) is responsible for sanitizing
-    #    the agent_id (agent-007 -> agent-007)
-
-    # --- CORRECTION (Ligne 80-81) ---
-    # L'annuaire (main.py) attend un document_id (agent-007)
-    # et l'endpoint est /api/v1/lookup/{document_id}
     document_id = agent_id.replace("/", "_")  # Sanitize ID
     lookup_url = f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{document_id}"
-    # --- FIN DE LA CORRECTION ---
 
     try:
         logging.info(f"Cache MISS. Fetching public key for '{agent_id}' from: {lookup_url}")
@@ -116,8 +107,7 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
             return None
 
         data = response.json()
-        # The key from our v1.2 directory (main.py) is under 'public_key'
-        public_key_pem = data.get("public_key")  # Doit correspondre au main.py
+        public_key_pem = data.get("public_key")
 
         if not public_key_pem:
             logging.error(
@@ -143,11 +133,11 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
 # --- API Endpoints ---
 
 @app.route("/v1/agent/invoke", methods=["POST"])
-@require_api_key  # <-- SÉCURITÉ AJOUTÉE
+@require_api_key  # L1 Security
 def invoke_agent():
     """
-    This is the main endpoint that our standalone 'agent_client.py' calls.
-    It verifies the signature (P-0) using the cached key lookup (P-1).
+    (P-1) This is the main endpoint that our standalone 'agent_client.py' calls.
+    It verifies the signature (L2) using the cached key lookup (P-1).
     """
 
     # 1. Get all components of the request
@@ -167,7 +157,6 @@ def invoke_agent():
     public_key = get_public_key(agent_id)
     if not public_key:
         logging.error(f"Zero-Trust Violation: Could not retrieve public key for agent '{agent_id}'.")
-        # This is the 403 error you were seeing!
         return jsonify({"error": f"Failed to verify agent identity: {agent_id}"}), 403
 
         # 3. Verify Signature
@@ -192,16 +181,81 @@ def invoke_agent():
 
     except InvalidSignature:
         logging.critical(f"FATAL: ZERO-TRUST VIOLATION! Invalid signature for agent '{agent_id}'.")
-        # This is the 401 error our client test expects!
-        return jsonify({"error": "Invalid signature."}), 401  # 401 Unauthorized
+        return jsonify({"error": "Invalid signature."}), 401
     except Exception as e:
         logging.error(f"Error during signature verification: {e}", exc_info=True)
         return jsonify({"error": "A critical error occurred during signature verification."}), 500
 
 
+# --- P-3: New Endpoint for A2A Negotiation ---
+
+@app.route("/v1/a2a/transact", methods=["POST"])
+@require_api_key  # L1 Security (API Key)
+def a2a_transact():
+    """
+    (P-3) Handles A2A (Agent-to-Agent) transactions per White Paper Sec 3.2.
+    Receives a TransactionRequest, verifies the signature (L2),
+    and (for now) returns a simulated successful response.
+    """
+
+    # 1. Get all components of the request
+    try:
+        # The body *is* the TransactionRequest (Sec 3.2)
+        body = request.json
+        signature_b64 = request.headers.get('X-Agent-Signature')
+        # The consumer_agent_id is the identity we must verify
+        agent_id = body.get("consumer_agent_id") # Per TransactionRequest schema
+    except Exception as e:
+        logging.error(f"Malformed A2A request: {e}")
+        return jsonify({"error": "Malformed request."}), 400
+
+    if not all([body, signature_b64, agent_id]):
+        logging.error("Zero-Trust Violation (A2A): Request is missing 'body', 'signature', or 'consumer_agent_id'.")
+        return jsonify({"error": "Malformed A2A request."}), 400
+
+    # 2. Get Public Key (using our P-1 cache)
+    # This fulfills Athéna's "Non-Negotiable Condition"
+    public_key = get_public_key(agent_id)
+    if not public_key:
+        logging.error(f"Zero-Trust Violation (A2A): Could not retrieve public key for agent '{agent_id}'.")
+        return jsonify({"error": f"Failed to verify agent identity: {agent_id}"}), 403
+
+    # 3. Verify Signature (L2)
+    try:
+        # 3a. Canonicalize the message (the full body)
+        canonical_message = json.dumps(body, sort_keys=True).encode('utf-8')
+        # 3b. Decode the signature
+        signature_bytes = base64.b64decode(signature_b64)
+        # 3c. Verify!
+        public_key.verify(signature_bytes, canonical_message)
+
+        logging.info(f"SUCCESS (A2A): Signature for agent '{agent_id}' VERIFIED.")
+
+        # 4. Return Simulated Success Response (TransactionResponse - Sec 3.2)
+        # This is where the *real* service logic would run.
+        # We simulate a successful outcome per the plan.
+        simulated_response = {
+            "transaction_id": body.get("transaction_id"),
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "result": {
+                "confirmation": "Service executed successfully (simulation).",
+                "provider_agent_id": "amorce-api" # Self-identify
+            },
+            "error_message": None
+        }
+        return jsonify(simulated_response), 200
+
+    except InvalidSignature:
+        logging.critical(f"FATAL: ZERO-TRUST VIOLATION (A2A)! Invalid signature for agent '{agent_id}'.")
+        return jsonify({"error": "Invalid signature."}), 401
+    except Exception as e:
+        logging.error(f"Error during A2A signature verification: {e}", exc_info=True)
+        return jsonify({"error": "A critical error occurred during signature verification."}), 500
+
 # --- Application Startup ---
 if __name__ == '__main__':
-    logging.info("Flask Orchestrator (P-1 Cache Test) initialized successfully.")
+    logging.info("Flask Orchestrator (P-3 A2A Ready) initialized successfully.")
     # Note: Flask's 'run' is only for local dev.
     app.run(debug=True, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')
 
