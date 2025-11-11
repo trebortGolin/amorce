@@ -2,26 +2,31 @@ import requests
 import os
 import time
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
+# Note: PSS Padding was for RSA. Ed25519 doesn't use it.
+# from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from google.cloud import secretmanager  # New import
 import base64
 import json
+from uuid import uuid4  # P-3 Import
+from datetime import datetime, UTC  # P-3 Import (Fixed)
 
 # --- Configuration ---
-# *** MISE À JOUR : Pointeur vers l'URL de production ***
-ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL",
-                                  "https://amorce-api-425870997313.us-central1.run.app/v1/agent/invoke")
+# P-1 Endpoint (Legacy test)
+ORCHESTRATOR_INVOKE_URL = "https://amorce-api-425870997313.us-central1.run.app/v1/agent/invoke"
+# P-3 Endpoint (New)
+ORCHESTRATOR_TRANSACT_URL = "https://amorce-api-425870997313.us-central1.run.app/v1/a2a/transact"
+
 AGENT_ID = os.environ.get("AGENT_ID", "agent-007")
 
-# *** NOUVEAU : Clé API pour s'authentifier auprès de l'Orchestrateur ***
+# L1 Security: API Key for the Orchestrator
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
 
 # GCP Project ID where the secret is stored.
 GCP_PROJECT_ID = "amorce-prod-rgosselin"
 
-# Secret name as created in step 1
+# L2 Security: Secret name for our Private Key
 SECRET_NAME = "atp-agent-private-key"
 
 # In-memory cache for the private key
@@ -50,7 +55,7 @@ def _get_key_from_secret_manager():
         # Extract the PEM data (in bytes)
         pem_data = response.payload.data
 
-        # Load the key from the bytes
+        # Load the key from the bytes (Ed25519 key)
         _private_key_cache = serialization.load_pem_private_key(
             pem_data,
             password=None,
@@ -62,29 +67,22 @@ def _get_key_from_secret_manager():
     except Exception as e:
         print(f"CRITICAL ERROR: Failed to load private key from Secret Manager.")
         print(f"Error: {e}")
-        # The application cannot function without this key.
-        # In a real scenario, this should prevent the container from starting.
         raise
 
 
-def sign_message(message_body):
+def sign_message(message_body: dict) -> str:
     """
-    Signs a message body (dict) using the in-memory private key.
+    Signs a message body (dict) using the in-memory Ed25519 private key.
     """
     private_key = _get_key_from_secret_manager()
 
     # The message must be canonicalized for the signature to be consistent.
-    # Use json.dumps with sort_keys=True for deterministic serialization
     canonical_message = json.dumps(message_body, sort_keys=True).encode('utf-8')
 
-    # --- CORRECTION ---
-    # The original code assumed an RSA key with PSS padding.
-    # The error "Ed25519PrivateKey.sign()" tells us this is an Ed25519 key.
-    # The Ed25519 `sign` method is simpler and takes only the message data.
+    # Ed25519 `sign` method is simple and takes only the message data.
     signature = private_key.sign(
         canonical_message
     )
-    # --- END OF CORRECTION ---
 
     # Return the signature as Base64 for HTTP transport
     return base64.b64encode(signature).decode('utf-8')
@@ -92,9 +90,9 @@ def sign_message(message_body):
 
 def send_signed_request(action, text):
     """
-    Builds, signs, and sends a request to the orchestrator.
+    (P-1 Test) Builds, signs, and sends a request to the /invoke endpoint.
     """
-    print(f"Sending signed request to {ORCHESTRATOR_URL}...")
+    print(f"Sending P-1 request to {ORCHESTRATOR_INVOKE_URL}...")
 
     body = {
         "agent_id": AGENT_ID,
@@ -103,7 +101,6 @@ def send_signed_request(action, text):
         "timestamp": int(time.time())
     }
 
-    # Sign the request body
     try:
         signature = sign_message(body)
     except Exception as e:
@@ -115,23 +112,17 @@ def send_signed_request(action, text):
         "Content-Type": "application/json"
     }
 
-    # *** NOUVEAU : Ajouter la clé API (Couche de Sécurité 1) ***
     if AGENT_API_KEY:
         headers["X-API-Key"] = AGENT_API_KEY
     else:
         print("CRITICAL: AGENT_API_KEY environment variable not set. Request will fail authentication.")
         return
-    # *** FIN DE L'AJOUT ***
 
     try:
-        response = requests.post(ORCHESTRATOR_URL, json=body, headers=headers, timeout=10)
+        response = requests.post(ORCHESTRATOR_INVOKE_URL, json=body, headers=headers, timeout=10)
 
         if response.status_code == 200:
             print("Orchestrator Response (Success):")
-            print(response.json())
-        elif response.status_code == 401:
-            print("Orchestrator Response (Error 401 Unauthorized):")
-            print("The signature was rejected by the server.")
             print(response.json())
         else:
             print(f"Orchestrator Response (Error {response.status_code}):")
@@ -141,16 +132,78 @@ def send_signed_request(action, text):
         print(f"Failed to connect to orchestrator: {e}")
 
 
-if __name__ == "__main__":
-    # Ensure the key is loaded on startup
+def send_a2a_transaction(service_id: str, query: str):
+    """
+    (P-3 Test) Builds, signs, and sends a TransactionRequest to the /transact endpoint.
+    """
+    print(f"Sending P-3 A2A request to {ORCHESTRATOR_TRANSACT_URL}...")
+
+    # This body MUST match the TransactionRequest schema (White Paper Sec 3.2)
+    body = {
+        "transaction_id": str(uuid4()),
+        "service_id": service_id,
+        "consumer_agent_id": AGENT_ID,  # We are the consumer
+        # FIX: Use timezone-aware datetime.now(datetime.UTC)
+        "timestamp": datetime.now(UTC).isoformat(),
+        "payload": {
+            "query": query  # This matches the 'input_schema' we created
+        }
+    }
+
     try:
+        # Sign the *entire* transaction body
+        signature = sign_message(body)
+    except Exception as e:
+        print(f"Failed to sign P-3 transaction: {e}")
+        return
+
+    headers = {
+        "X-Agent-Signature": signature,  # L2 Security
+        "Content-Type": "application/json"
+    }
+
+    if AGENT_API_KEY:
+        headers["X-API-Key"] = AGENT_API_KEY  # L1 Security
+    else:
+        print("CRITICAL: AGENT_API_KEY environment variable not set. Request will fail authentication.")
+        return
+
+    try:
+        response = requests.post(ORCHESTRATOR_TRANSACT_URL, json=body, headers=headers, timeout=10)
+
+        print(f"Orchestrator A2A Response (Status: {response.status_code}):")
+        print(response.json())
+
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to connect to orchestrator (A2A): {e}")
+
+
+if __name__ == "__main__":
+    try:
+        # Load key once
         _get_key_from_secret_manager()
 
-        # Send a test request
-        send_signed_request(
-            action="query_nlu",
-            text="What is the status of project Nexus?"
-        )
-    except Exception as e:
-        print("Agent failed to start due to key issue.")
+        # --- Test P-1 (Commented out) ---
+        # print("--- RUNNING P-1 (INVOKE) TEST ---")
+        # send_signed_request(
+        #     action="query_nlu",
+        #     text="What is the status of project Nexus?"
+        # )
 
+        # --- Test P-3 (New) ---
+        print("\n--- RUNNING P-3 (A2A TRANSACT) TEST ---")
+
+        # !!! IMPORTANT !!!
+        # Replace this with the Document ID (service_id) you copied from Firestore
+        TEST_SERVICE_ID = "0gY79QjN2M9ex0t8CgL1"
+
+        if "YOUR-FIRESTORE-SERVICE-ID-HERE" in TEST_SERVICE_ID:
+            print("ERROR: Please update TEST_SERVICE_ID in agent_client.py (line 217)")
+        else:
+            send_a2a_transaction(
+                service_id=TEST_SERVICE_ID,
+                query="What is the capital of France?"
+            )
+
+    except Exception as e:
+        print(f"Agent failed to start: {e}")
