@@ -1,6 +1,7 @@
-# --- ORCHESTRATOR (Amorce P-3) ---
-# v1.1 (Security): Added @require_api_key decorator for production security.
-# v1.2 (P-3): Added /v1/a2a/transact endpoint for A2A negotiation.
+# --- ORCHESTRATOR (Amorce P-4) ---
+# v1.1 (Security): Added @require_api_key decorator.
+# v1.2 (P-3): Added /v1/a2a/transact endpoint.
+# v1.3 (P-4): Updated get_public_key to support Annexe A (UUIDs + status check).
 
 import os
 import json
@@ -8,8 +9,8 @@ import logging
 import requests
 import base64
 import time
-from datetime import datetime  # P-3 Import
-from uuid import uuid4         # P-3 Import
+from datetime import datetime, UTC  # P-3 Import
+from uuid import uuid4  # P-3 Import
 from functools import wraps
 from typing import Callable, Any, Optional, Dict
 
@@ -63,7 +64,7 @@ def require_api_key(f: Callable) -> Callable:
     return decorated_function
 
 
-# --- P-1: In-Memory Public Key Cache ---
+# --- P-1 / P-4: In-Memory Public Key Cache ---
 # { "agent_id": (Ed25519PublicKey, timestamp), ... }
 PUBLIC_KEY_CACHE: Dict[str, tuple] = {}
 CACHE_TTL_SECONDS = 300  # 5 minutes, as requested by Athéna
@@ -71,8 +72,9 @@ CACHE_TTL_SECONDS = 300  # 5 minutes, as requested by Athéna
 
 def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
     """
-    Fetches the public key for a given agent_id from the Trust Directory.
+    (P-4 Updated) Fetches the public key for a given agent_id (now a UUID).
     Implements P-1: In-memory cache with a 5-minute TTL.
+    Implements P-4: Checks the 'status' field from the AgentIdentityRecord.
     """
     if not TRUST_DIRECTORY_URL:
         logging.error("FATAL: TRUST_DIRECTORY_URL is not set. Cannot verify signatures.")
@@ -89,8 +91,9 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
             logging.info(f"Cache STALE for agent '{agent_id}'. Fetching...")
 
     # 2. If not in cache or stale, fetch from Trust Directory
-    #    This endpoint matches the main.py of amorce-trust-directory
-    document_id = agent_id.replace("/", "_")  # Sanitize ID
+    #    P-4: The agent_id is now the UUID, which matches the document_id
+    #    The old sanitation (replace("/", "_")) is no longer needed.
+    document_id = agent_id
     lookup_url = f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{document_id}"
 
     try:
@@ -99,7 +102,7 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
 
         if response.status_code == 404:
             logging.error(
-                f"Signature verification failed: Agent ID '{agent_id}' (Doc: {document_id}) not found in Trust Directory (404).")
+                f"Signature verification failed: Agent ID '{agent_id}' not found in Trust Directory (404).")
             return None
 
         if response.status_code != 200:
@@ -107,8 +110,17 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
             return None
 
         data = response.json()
-        public_key_pem = data.get("public_key")
 
+        # --- P-4: New Status Check (Annexe A compliance) ---
+        agent_status = data.get("status")
+        if agent_status != "active":
+            logging.warning(
+                f"Signature verification failed: Agent '{agent_id}' is not active (status: {agent_status}).")
+            # Cache the failure? For now, just reject.
+            return None  # Reject if not active
+        # --- End P-4 Check ---
+
+        public_key_pem = data.get("public_key")
         if not public_key_pem:
             logging.error(
                 f"Signature verification failed: Trust Directory response for '{agent_id}' missing 'public_key'.")
@@ -137,14 +149,15 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
 def invoke_agent():
     """
     (P-1) This is the main endpoint that our standalone 'agent_client.py' calls.
-    It verifies the signature (L2) using the cached key lookup (P-1).
+    (P-4): It now expects agent_id to be a UUID and relies on get_public_key
+           to check the agent's 'status'.
     """
 
     # 1. Get all components of the request
     try:
         body = request.json
         signature_b64 = request.headers.get('X-Agent-Signature')
-        agent_id = body.get("agent_id")
+        agent_id = body.get("agent_id")  # P-4: This will be a UUID
     except Exception as e:
         logging.error(f"Malformed request: {e}")
         return jsonify({"error": "Malformed request."}), 400
@@ -153,10 +166,10 @@ def invoke_agent():
         logging.error("Zero-Trust Violation: Request is missing 'body', 'signature', or 'agent_id'.")
         return jsonify({"error": "Malformed request."}), 400
 
-    # 2. Get Public Key (using our P-1 cache)
+    # 2. Get Public Key (using our P-1/P-4 cache function)
     public_key = get_public_key(agent_id)
     if not public_key:
-        logging.error(f"Zero-Trust Violation: Could not retrieve public key for agent '{agent_id}'.")
+        logging.error(f"Zero-Trust Violation: Could not retrieve or validate public key for agent '{agent_id}'.")
         return jsonify({"error": f"Failed to verify agent identity: {agent_id}"}), 403
 
         # 3. Verify Signature
@@ -173,7 +186,6 @@ def invoke_agent():
         logging.info(f"SUCCESS: Signature for agent '{agent_id}' VERIFIED.")
 
         # 4. Return Success
-        # In a real app, this is where we would process the 'action'
         return jsonify({
             "status": "Signature verified, task processed (simulation).",
             "received_action": body.get("action")
@@ -194,8 +206,8 @@ def invoke_agent():
 def a2a_transact():
     """
     (P-3) Handles A2A (Agent-to-Agent) transactions per White Paper Sec 3.2.
-    Receives a TransactionRequest, verifies the signature (L2),
-    and (for now) returns a simulated successful response.
+    (P-4): It now expects consumer_agent_id to be a UUID and relies on
+           get_public_key to check the agent's 'status'.
     """
 
     # 1. Get all components of the request
@@ -204,7 +216,7 @@ def a2a_transact():
         body = request.json
         signature_b64 = request.headers.get('X-Agent-Signature')
         # The consumer_agent_id is the identity we must verify
-        agent_id = body.get("consumer_agent_id") # Per TransactionRequest schema
+        agent_id = body.get("consumer_agent_id")  # P-4: This will be a UUID
     except Exception as e:
         logging.error(f"Malformed A2A request: {e}")
         return jsonify({"error": "Malformed request."}), 400
@@ -213,11 +225,11 @@ def a2a_transact():
         logging.error("Zero-Trust Violation (A2A): Request is missing 'body', 'signature', or 'consumer_agent_id'.")
         return jsonify({"error": "Malformed A2A request."}), 400
 
-    # 2. Get Public Key (using our P-1 cache)
+    # 2. Get Public Key (using our P-1/P-4 cache function)
     # This fulfills Athéna's "Non-Negotiable Condition"
     public_key = get_public_key(agent_id)
     if not public_key:
-        logging.error(f"Zero-Trust Violation (A2A): Could not retrieve public key for agent '{agent_id}'.")
+        logging.error(f"Zero-Trust Violation (A2A): Could not retrieve or validate public key for agent '{agent_id}'.")
         return jsonify({"error": f"Failed to verify agent identity: {agent_id}"}), 403
 
     # 3. Verify Signature (L2)
@@ -232,15 +244,13 @@ def a2a_transact():
         logging.info(f"SUCCESS (A2A): Signature for agent '{agent_id}' VERIFIED.")
 
         # 4. Return Simulated Success Response (TransactionResponse - Sec 3.2)
-        # This is where the *real* service logic would run.
-        # We simulate a successful outcome per the plan.
         simulated_response = {
             "transaction_id": body.get("transaction_id"),
             "status": "success",
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat(),  # P-4: Use timezone-aware
             "result": {
                 "confirmation": "Service executed successfully (simulation).",
-                "provider_agent_id": "amorce-api" # Self-identify
+                "provider_agent_id": "amorce-api"  # Self-identify
             },
             "error_message": None
         }
@@ -253,9 +263,9 @@ def a2a_transact():
         logging.error(f"Error during A2A signature verification: {e}", exc_info=True)
         return jsonify({"error": "A critical error occurred during signature verification."}), 500
 
+
 # --- Application Startup ---
 if __name__ == '__main__':
-    logging.info("Flask Orchestrator (P-3 A2A Ready) initialized successfully.")
+    logging.info("Flask Orchestrator (P-4 Annexe A Ready) initialized successfully.")
     # Note: Flask's 'run' is only for local dev.
     app.run(debug=True, port=int(os.environ.get('PORT', 8080)), host='0.0.0.0')
-
