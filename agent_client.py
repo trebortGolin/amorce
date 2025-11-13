@@ -18,7 +18,9 @@ ORCHESTRATOR_INVOKE_URL = "https://amorce-api-425870997313.us-central1.run.app/v
 # P-3 Endpoint (New)
 ORCHESTRATOR_TRANSACT_URL = "https://amorce-api-425870997313.us-central1.run.app/v1/a2a/transact"
 
-AGENT_ID = os.environ.get("AGENT_ID", "agent-007")
+# P-4: AGENT_ID is now a static UUID, compliant with Annexe A
+# We will use this ID to update our Firestore record (Task 4)
+AGENT_ID = os.environ.get("AGENT_ID", "e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a")
 
 # L1 Security: API Key for the Orchestrator
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
@@ -95,7 +97,7 @@ def send_signed_request(action, text):
     print(f"Sending P-1 request to {ORCHESTRATOR_INVOKE_URL}...")
 
     body = {
-        "agent_id": AGENT_ID,
+        "agent_id": AGENT_ID,  # P-4: This is now a UUID
         "action": action,
         "text": text,
         "timestamp": int(time.time())
@@ -142,7 +144,7 @@ def send_a2a_transaction(service_id: str, query: str):
     body = {
         "transaction_id": str(uuid4()),
         "service_id": service_id,
-        "consumer_agent_id": AGENT_ID,  # We are the consumer
+        "consumer_agent_id": AGENT_ID,  # P-4: This is now a UUID
         # FIX: Use timezone-aware datetime.now(datetime.UTC)
         "timestamp": datetime.now(UTC).isoformat(),
         "payload": {
@@ -183,27 +185,35 @@ if __name__ == "__main__":
         # Load key once
         _get_key_from_secret_manager()
 
-        # --- Test P-1 (Commented out) ---
-        # print("--- RUNNING P-1 (INVOKE) TEST ---")
-        # send_signed_request(
-        #     action="query_nlu",
-        #     text="What is the status of project Nexus?"
-        # )
+        # --- Test P-1 (P-4 VALIDATION) ---
+        print("\n--- RUNNING P-1 (INVOKE) TEST (P-4 VALIDATION) ---")
+        send_signed_request(
+            action="query_nlu",
+            text="What is the status of project Nexus?"
+        )
 
-        # --- Test P-3 (New) ---
-        print("\n--- RUNNING P-3 (A2A TRANSACT) TEST ---")
+        # --- Test P-3 (Commented out) ---
+        # print("\n--- RUNNING P-3 (A2A TRANSACT) TEST ---")
 
         # !!! IMPORTANT !!!
         # Replace this with the Document ID (service_id) you copied from Firestore
-        TEST_SERVICE_ID = "0gY79QjN2M9ex0t8CgL1"
+        # TEST_SERVICE_ID = "0gY79QjN2M9ex0t8CgL1" # <-- EXAMPLE ID. REPLACE THIS.
 
-        if "YOUR-FIRESTORE-SERVICE-ID-HERE" in TEST_SERVICE_ID:
-            print("ERROR: Please update TEST_SERVICE_ID in agent_client.py (line 217)")
-        else:
-            send_a2a_transaction(
-                service_id=TEST_SERVICE_ID,
-                query="What is the capital of France?"
-            )
+        # if "YOUR-FIRESTORE-SERVICE-ID-HERE" in TEST_SERVICE_ID:
+        #     print("ERROR: Please update TEST_SERVICE_ID in agent_client.py (line 217)")
+        # elif "0gY79QjN2M9ex0t8CgL1" in TEST_SERVICE_ID:
+        #     print("WARNING: TEST_SERVICE_ID is still set to the example value.")
+        #     print("Please update it to a real Service ID from your 'services' collection in Firestore.")
+        #     # We still run the test, but it will likely fail.
+        #     send_a2a_transaction(
+        #         service_id=TEST_SERVICE_ID,
+        #         query="What is the capital of France?"
+        #     )
+        # else:
+        #     send_a2a_transaction(
+        #         service_id=TEST_SERVICE_ID,
+        #         query="What is the capital of France?"
+        #     )
 
     except Exception as e:
         print(f"Agent failed to start: {e}")
