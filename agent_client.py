@@ -9,17 +9,16 @@ from cryptography.hazmat.backends import default_backend
 from google.cloud import secretmanager  # New import
 import base64
 import json
-from uuid import uuid4         # P-3 Import
+from uuid import uuid4  # P-3 Import
 from datetime import datetime, UTC  # P-3 Import (Fixed)
 
 # --- Configuration ---
 # P-1 Endpoint (Legacy test)
 ORCHESTRATOR_INVOKE_URL = "https://amorce-api-425870997313.us-central1.run.app/v1/agent/invoke"
-# P-3 Endpoint (New)
+# P-3/P-6 Endpoint (New)
 ORCHESTRATOR_TRANSACT_URL = "https://amorce-api-425870997313.us-central1.run.app/v1/a2a/transact"
 
-# P-4: AGENT_ID is now a static UUID, compliant with Annexe A
-# We will use this ID to update our Firestore record (Task 4)
+# P-4: AGENT_ID is our agent's (Agent A) static UUID
 AGENT_ID = os.environ.get("AGENT_ID", "e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a")
 
 # L1 Security: API Key for the Orchestrator
@@ -33,6 +32,7 @@ SECRET_NAME = "atp-agent-private-key"
 
 # In-memory cache for the private key
 _private_key_cache = None
+
 
 def _get_key_from_secret_manager():
     """
@@ -70,6 +70,7 @@ def _get_key_from_secret_manager():
         print(f"Error: {e}")
         raise
 
+
 def sign_message(message_body: dict) -> str:
     """
     Signs a message body (dict) using the in-memory Ed25519 private key.
@@ -87,6 +88,7 @@ def sign_message(message_body: dict) -> str:
     # Return the signature as Base64 for HTTP transport
     return base64.b64encode(signature).decode('utf-8')
 
+
 def send_signed_request(action, text):
     """
     (P-1 Test) Builds, signs, and sends a request to the /invoke endpoint.
@@ -94,7 +96,7 @@ def send_signed_request(action, text):
     print(f"Sending P-1 request to {ORCHESTRATOR_INVOKE_URL}...")
 
     body = {
-        "agent_id": AGENT_ID, # P-4: This is now a UUID
+        "agent_id": AGENT_ID,  # P-4: This is now a UUID
         "action": action,
         "text": text,
         "timestamp": int(time.time())
@@ -131,38 +133,35 @@ def send_signed_request(action, text):
         print(f"Failed to connect to orchestrator: {e}")
 
 
-def send_a2a_transaction(service_id: str, query: str):
+def send_a2a_transaction(service_id: str, payload: dict):  # P-6.4: Changed 'query' to 'payload'
     """
-    (P-3 Test) Builds, signs, and sends a TransactionRequest to the /transact endpoint.
+    (P-6 Test) Builds, signs, and sends a TransactionRequest to the /transact endpoint.
     """
-    print(f"Sending P-3 A2A request to {ORCHESTRATOR_TRANSACT_URL}...")
+    print(f"Sending P-6 A2A request to {ORCHESTRATOR_TRANSACT_URL}...")
 
     # This body MUST match the TransactionRequest schema (White Paper Sec 3.2)
     body = {
         "transaction_id": str(uuid4()),
         "service_id": service_id,
-        "consumer_agent_id": AGENT_ID, # P-4: This is now a UUID
-        # FIX: Use timezone-aware datetime.now(datetime.UTC)
+        "consumer_agent_id": AGENT_ID,  # P-4: This is now a UUID
         "timestamp": datetime.now(UTC).isoformat(),
-        "payload": {
-            "query": query # This matches the 'input_schema' we created
-        }
+        "payload": payload  # P-6.4: Use the provided payload object directly
     }
 
     try:
         # Sign the *entire* transaction body
         signature = sign_message(body)
     except Exception as e:
-        print(f"Failed to sign P-3 transaction: {e}")
+        print(f"Failed to sign P-6 transaction: {e}")
         return
 
     headers = {
-        "X-Agent-Signature": signature, # L2 Security
+        "X-Agent-Signature": signature,  # L2 Security
         "Content-Type": "application/json"
     }
 
     if AGENT_API_KEY:
-        headers["X-API-Key"] = AGENT_API_KEY # L1 Security
+        headers["X-API-Key"] = AGENT_API_KEY  # L1 Security
     else:
         print("CRITICAL: AGENT_API_KEY environment variable not set. Request will fail authentication.")
         return
@@ -171,7 +170,8 @@ def send_a2a_transaction(service_id: str, query: str):
         response = requests.post(ORCHESTRATOR_TRANSACT_URL, json=body, headers=headers, timeout=10)
 
         print(f"Orchestrator A2A Response (Status: {response.status_code}):")
-        print(response.json())
+        # Use json.dumps for pretty printing the JSON response
+        print(json.dumps(response.json(), indent=2))
 
     except requests.exceptions.RequestException as e:
         print(f"Failed to connect to orchestrator (A2A): {e}")
@@ -189,30 +189,25 @@ if __name__ == "__main__":
         #     text="What is the status of project Nexus?"
         # )
 
-        # --- Test P-3 (NOW ACTIVE) ---
-        print("\n--- RUNNING P-3 (A2A TRANSACT) TEST ---")
+        # --- Test P-6 (NOW ACTIVE) ---
+        print("\n--- RUNNING P-6 (FAKE STORE API TRANSACT) TEST ---")
 
-        # !!! IMPORTANT !!!
-        # This ID was provided from your last Firestore document creation
-        TEST_SERVICE_ID = "637e78d1-259e-4a12-a2fb-da15cb50f454" # <-- This is your ID
+        # Tâche P-6.2: This is the new Service ID for "product_retrieval"
+        TEST_SERVICE_ID = "s7c1b1c8-b1c1-4c1e-c1e1-b1c1e8f4b1s7"
 
-        # This block will now run the 'else' path successfully.
-        if "YOUR-FIRESTORE-SERVICE-ID-HERE" in TEST_SERVICE_ID:
-            print("ERROR: Please update TEST_SERVICE_ID in agent_client.py (line 217)")
-        elif "FhIbtwoK2B3jZ89O8Z90" in TEST_SERVICE_ID:
-             print("Running P-3 test with Service ID: FhIbtwoK2B3jZ89O8Z90")
-             # This will run
-             send_a2a_transaction(
-                 service_id=TEST_SERVICE_ID,
-                 query="What is the capital of France?"
-             )
-        else:
-            # Or this path will run if you change the ID to something else
-            print(f"Running P-3 test with Service ID: {TEST_SERVICE_ID}")
-            send_a2a_transaction(
-                service_id=TEST_SERVICE_ID,
-                query="What is the capital of France?"
-            )
+        # Tâche P-6.4: This is the new payload (must match the input_schema)
+        # We fetch product "1"
+        TEST_PAYLOAD = {
+            "product_id": "1"  # As required by Athéna (must be a string)
+        }
+
+        print(f"Running P-6 test with Service ID: {TEST_SERVICE_ID}")
+        print(f"Payload: {json.dumps(TEST_PAYLOAD)}")
+
+        send_a2a_transaction(
+            service_id=TEST_SERVICE_ID,
+            payload=TEST_PAYLOAD
+        )
 
     except Exception as e:
         print(f"Agent failed to start: {e}")
