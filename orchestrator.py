@@ -1,9 +1,11 @@
-# --- ORCHESTRATOR (Nexus NATP v1.0) ---
-# Sprint 1: Integrity & Bridge
-# Features:
+# --- ORCHESTRATOR (Nexus NATP v1.2) ---
+# STATUS: PRODUCTION READY
+# Features Included:
 # - L1 Security: API Key (X-API-Key)
 # - L2 Security: Ed25519 Signature Verification
-# - Bridge: No-Code Gateway via Smart Agent
+# - Bridge: No-Code Gateway via Smart Agent (FR-O1)
+# - HITL: Human-In-The-Loop Validation (FR-P1)
+# - Metering: Firestore Ledger Logging (FR-O3)
 
 import os
 import json
@@ -11,7 +13,7 @@ import logging
 import requests
 import base64
 import time
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from uuid import uuid4
 from functools import wraps
 from typing import Callable, Any, Optional, Dict
@@ -21,6 +23,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.exceptions import InvalidSignature
 
+# --- Google Cloud Imports ---
+from google.cloud import firestore
 from flask import Flask, request, jsonify, g
 
 # --- IMPORT DU SMART AGENT (Pour le Bridge) ---
@@ -39,6 +43,16 @@ if not TRUST_DIRECTORY_URL:
 if not AGENT_API_KEY:
     logging.warning("AGENT_API_KEY environment variable not set. API will be insecure.")
 
+# --- P-2: Database Connection (Ledger) ---
+# On initialise Firestore pour le metering (FR-O3)
+try:
+    db_client = firestore.Client(project="amorce-prod-rgosselin")
+    logging.info("Firestore Client Initialized for Metering.")
+except Exception as e:
+    logging.warning(f"Firestore init failed (Metering will be disabled): {e}")
+    db_client = None
+
+
 # --- Authentication Decorator (Security Layer 1) ---
 def require_api_key(f: Callable) -> Callable:
     @wraps(f)
@@ -47,7 +61,6 @@ def require_api_key(f: Callable) -> Callable:
             logging.warning("Bypassing API key check (server key not set).")
             return f(*args, **kwargs)
 
-        # FIX: On garde 'X-API-Key' pour être compatible avec smart_agent.py
         key = request.headers.get('X-API-Key')
         if not key or key != AGENT_API_KEY:
             logging.warning(f"Unauthorized access attempt.")
@@ -55,11 +68,14 @@ def require_api_key(f: Callable) -> Callable:
 
         g.auth_source = f"Orchestrator"
         return f(*args, **kwargs)
+
     return decorated_function
+
 
 # --- P-4: Public Key Cache ---
 PUBLIC_KEY_CACHE: Dict[str, tuple] = {}
 CACHE_TTL_SECONDS = 300
+
 
 def get_agent_record(agent_id: str) -> Optional[dict]:
     """Fetches Agent Record from Trust Directory."""
@@ -79,6 +95,7 @@ def get_agent_record(agent_id: str) -> Optional[dict]:
         logging.error(f"Agent lookup failed: {e}")
         return None
 
+
 def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
     """Fetches and caches the public key."""
     cached = PUBLIC_KEY_CACHE.get(agent_id)
@@ -97,35 +114,51 @@ def get_public_key(agent_id: str) -> Optional[ed25519.Ed25519PublicKey]:
     except Exception:
         return None
 
-# --- API Endpoints ---
+
+# --- Helper Functions (HITL & Metering) ---
+
 def validate_hitl_compliance(body: dict):
     """
-    (FR-P1) Enforces Human-In-The-Loop protocol for sensitive transactions.
-    Rules:
-    1. If intent is 'transaction.commit', a 'human_approval_token' MUST be present.
+    (FR-P1) Enforces Human-In-The-Loop protocol.
     """
-    # On récupère le payload interne
     payload = body.get("payload", {})
-
-    # On cherche l'intent (soit dans le payload, soit c'est implicite par le contexte)
-    # Note: Dans la V1, on surveille spécifiquement les intents critiques
     intent = payload.get("intent")
 
-    # Si c'est un engagement financier (COMMIT), on exige l'humain
     if intent == "transaction.commit":
         token = payload.get("human_approval_token")
         if not token:
             logging.warning(f"HITL Violation: Agent attempted COMMIT without human token.")
             raise ValueError("HITL Violation: 'transaction.commit' requires 'human_approval_token'.")
+        logging.info(f"HITL Compliance: Approval token present.")
 
-        logging.info(f"HITL Compliance: Approval token present for transaction.")
 
+def log_transaction_to_ledger(tx_data: dict):
+    """
+    (FR-O3) Writes the transaction result to the Firestore Ledger.
+    """
+    if not db_client:
+        return
+
+    try:
+        # Enregistrement asynchrone
+        doc_ref = db_client.collection("ledger").document(tx_data.get("transaction_id", "unknown"))
+
+        record = tx_data.copy()
+        record["ingested_at"] = firestore.SERVER_TIMESTAMP
+
+        doc_ref.set(record)
+        logging.info(f"METERING: Transaction logged to Ledger.")
+    except Exception as e:
+        logging.error(f"METERING ERROR: Failed to write to ledger: {e}")
+
+
+# --- API Endpoints ---
 
 @app.route("/v1/a2a/transact", methods=["POST"])
 @require_api_key
 def a2a_transact():
     """
-    Core A2A Routing Endpoint.
+    Core A2A Routing Endpoint with HITL & Metering.
     """
     try:
         body = request.json
@@ -135,35 +168,26 @@ def a2a_transact():
         if not all([body, signature_b64, consumer_id]):
             return jsonify({"error": "Malformed request"}), 400
 
-        # L2 Verification
+        # 1. L2 Verification
         pub_key = get_public_key(consumer_id)
         if not pub_key:
             return jsonify({"error": "Identity verification failed"}), 403
 
         try:
-            canonical = json.dumps(body, sort_keys=True).encode('utf-8')
-            sig_bytes = base64.b64decode(signature_b64)
-            pub_key.verify(sig_bytes, canonical)
-        except InvalidSignature:
-            return jsonify({"error": "Invalid Signature"}), 401
-        try:
+            # Correction: Encodage propre sur une seule ligne
             canonical = json.dumps(body, sort_keys=True).encode('utf-8')
             sig_bytes = base64.b64decode(signature_b64)
             pub_key.verify(sig_bytes, canonical)
         except InvalidSignature:
             return jsonify({"error": "Invalid Signature"}), 401
 
-            # --- BEGIN BLOC HITL (new) ---
-            # HITL Enforcement (FR-P1)
+        # 2. HITL Enforcement (FR-P1)
         try:
             validate_hitl_compliance(body)
         except ValueError as e:
             return jsonify({"error": str(e)}), 403
-            # --- END BLOC HITL ---
 
-            # Routing Logic (P-6)
-        service_id = body.get("service_id")
-        # Routing Logic (P-6)
+        # 3. Routing Logic (P-6)
         service_id = body.get("service_id")
         service_url = f"{TRUST_DIRECTORY_URL}/api/v1/services/{service_id}"
 
@@ -177,7 +201,7 @@ def a2a_transact():
         # Get Provider Endpoint
         prov_record = get_agent_record(provider_id)
         if not prov_record:
-             return jsonify({"error": "Provider not found"}), 404
+            return jsonify({"error": "Provider not found"}), 404
 
         endpoint = prov_record["metadata"]["api_endpoint"]
         template = contract["metadata"]["service_path_template"]
@@ -187,11 +211,19 @@ def a2a_transact():
         final_url = f"{endpoint}{template.format(**payload)}"
 
         ext_resp = requests.get(final_url, timeout=10)
-        return jsonify({
+
+        # 4. Prepare Response & Metering
+        result_data = {
             "transaction_id": body.get("transaction_id"),
             "status": "success",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "result": ext_resp.json()
-        })
+        }
+
+        # 5. Metering (FR-O3) - Enregistrement dans le Grand Livre
+        log_transaction_to_ledger(result_data)
+
+        return jsonify(result_data), 200
 
     except Exception as e:
         logging.error(f"A2A Error: {e}")
@@ -215,7 +247,7 @@ def nexus_bridge():
         payload = req_data.get("payload")
 
         if not service_id or not payload:
-             return jsonify({"error": "Missing 'service_id' or 'payload'"}), 400
+            return jsonify({"error": "Missing 'service_id' or 'payload'"}), 400
 
         logging.info(f"BRIDGE: Delegating to Smart Agent for Service {service_id}")
 
@@ -227,6 +259,8 @@ def nexus_bridge():
     except Exception as e:
         logging.error(f"Bridge Error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
 # --- END NEXUS BRIDGE ---
 
 if __name__ == '__main__':
