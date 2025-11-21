@@ -88,7 +88,7 @@ def get_public_key(agent_id: str):
 
     if not TRUST_DIRECTORY_URL: return None
     try:
-        resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{agent_id}", timeout=3)
+        resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{agent_id}", timeout=10)
         if resp.status_code != 200 or resp.json().get("status") != "active": return None
         pem = resp.json().get("public_key")
         key = serialization.load_pem_public_key(pem.encode('utf-8'))
@@ -173,11 +173,11 @@ def a2a_transact():
 
         # 3. ROUTING (P-6)
         srv_id = body.get("service_id")
-        srv_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/services/{srv_id}", timeout=3)
+        srv_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/services/{srv_id}", timeout=10)
         if srv_resp.status_code != 200: return jsonify({"error": "Service Not Found"}), 404
 
         contract = srv_resp.json()
-        prov_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{contract['provider_agent_id']}", timeout=3)
+        prov_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{contract['provider_agent_id']}", timeout=10)
         if prov_resp.status_code != 200: return jsonify({"error": "Provider Not Found"}), 404
 
         # Execute

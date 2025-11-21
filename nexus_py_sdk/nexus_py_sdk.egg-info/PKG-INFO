@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: nexus-py-sdk
+Version: 0.1.0
+Summary: Official Python SDK for the Nexus Agent Transaction Protocol (NATP)
+Author: Athena Architecture
+Requires-Python: >=3.9
+Requires-Dist: cryptography>=43.0.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: requests>=2.31.0
+Requires-Dist: google-cloud-secret-manager>=2.16.0
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
