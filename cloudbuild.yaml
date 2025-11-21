@@ -1,5 +1,5 @@
-# CI/CD configuration file for the 'nexus-orchestrator' service (The Router)
-# FR-D1: Renamed from 'amorce-api' to 'nexus-orchestrator' per BRD v5.2
+# CI/CD configuration file for the 'NATP' service (The Router)
+# Renamed to 'NATP' per User Request
 
 steps:
   # Step 1: Build the Docker image
@@ -7,29 +7,29 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nexus-orchestrator:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/NATP:$COMMIT_SHA'
       - '.'
 
   # Step 2: Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nexus-orchestrator:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/NATP:$COMMIT_SHA'
 
   # Step 3: Deploy the new image to Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
       - 'run'
       - 'deploy'
-      - 'nexus-orchestrator' # The Standardized Service Name
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nexus-orchestrator:$COMMIT_SHA'
+      - 'NATP' # Service Name
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/NATP:$COMMIT_SHA'
       - '--region=us-central1'
       - '--allow-unauthenticated'
-    # Note: Secrets (AGENT_API_KEY, etc.) are linked to the service.
+    # Secrets are linked to the service environment
 
 # Specify the final image to store
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nexus-orchestrator:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/NATP:$COMMIT_SHA'
 
 options:
   logging: CLOUD_LOGGING_ONLY
