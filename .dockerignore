@@ -1,0 +1,19 @@
+# --- SYSTEM & ENVIRONMENT ---
+.git
+.gitignore
+.dockerignore
+.env
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- IDE SETTINGS ---
+.idea/
+.vscode/
+
+# --- CRITICAL: PREVENT ARCHITECTURE POLLUTION ---
+# We ignore the local 'nexus' folder to prevent it from overwriting
+# the system-installed 'nexus' library in the container.
+nexus/

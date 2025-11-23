@@ -1,16 +1,23 @@
-Python Virtual Environment
+Python
+
+pycache/
+*.pyc
 venv/
+.env
 
-PyCharm configuration files
-.idea/
+Security (CRITICAL)
 
-Python cache files
-pycache/*.pyc
-
-macOS system files
+*.pem
+*.key
 .DS_Store
 
---- CRITICAL: Security Keys ---
+IDE
 
-Ignore all .pem files (private and public keys)
-*.pem
+.idea/
+.vscode/
+
+Build artifacts
+
+build/
+dist/
+*.egg-info/

@@ -1,124 +1,167 @@
-# --- SMART AGENT (NATP V1.3) ---
-# Independent implementation. Does NOT depend on 'nexus' module.
-# Handles: Identity (Google Secret Manager), Signing (Ed25519), Discovery, Execution.
+# --- SMART AGENT (Nexus NATP v1.4 - System Lib) ---
+# STATUS: REFACTORED (Ticket-CODE-03)
+# Role:
+# 1. "Agent A" Logic (Gemini Brain)
+# 2. Bridge Logic (Called by Orchestrator)
+#
+# Changes:
+# - Replaced raw cryptography/requests with 'nexus' system library.
+# - Implements 'NexusClient' for all interactions.
 
 import os
 import json
-import time
-import base64
-import requests
-from uuid import uuid4
-from datetime import datetime, timezone
+import logging
+import google.generativeai as genai
+from typing import Dict, Any, Optional
 
-# Cryptography Imports
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.backends import default_backend
-from google.cloud import secretmanager
+# --- INFRASTRUCTURE: System Library Import ---
+from nexus import NexusClient, IdentityManager, GoogleSecretManagerProvider
 
 # --- Configuration ---
-# We use internal URLs for Cloud Run to Cloud Run communication if needed,
-# but external URLs are safer for generic config.
-TRUST_DIRECTORY_URL = os.environ.get("TRUST_DIRECTORY_URL", "https://amorce-trust-api-425870997313.us-central1.run.app")
-# Self-reference for loopback calls (Bridge)
-ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL", "http://localhost:8080")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("smart_agent")
 
-AGENT_ID = os.environ.get("AGENT_ID", "e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a")
-AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
+# Identity Configuration
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "amorce-prod-rgosselin")
 SECRET_NAME = os.environ.get("SECRET_NAME", "atp-agent-private-key")
+AGENT_ID = os.environ.get("AGENT_ID", "e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a")
+AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
 
-_private_key_cache = None
+# Network Configuration
+TRUST_DIRECTORY_URL = os.environ.get("TRUST_DIRECTORY_URL")
+ORCHESTRATOR_URL = os.environ.get("ORCHESTRATOR_URL")
 
-def _get_key_from_secret_manager():
+# Gemini Configuration
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+# --- SINGLETONS ---
+_identity_manager: Optional[IdentityManager] = None
+_nexus_client: Optional[NexusClient] = None
+
+
+def get_nexus_client() -> NexusClient:
     """
-    Loads the Ed25519 private key from Google Secret Manager.
+    Initializes and returns a singleton NexusClient.
+    Loads identity from Google Secret Manager if not already loaded.
     """
-    global _private_key_cache
-    if _private_key_cache:
-        return _private_key_cache
+    global _identity_manager, _nexus_client
 
-    try:
-        print(f"🔐 Loading identity from Secret Manager: {SECRET_NAME}...")
-        client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{GCP_PROJECT_ID}/secrets/{SECRET_NAME}/versions/latest"
-        response = client.access_secret_version(request={"name": name})
-        pem_data = response.payload.data
+    if _nexus_client:
+        return _nexus_client
 
-        _private_key_cache = serialization.load_pem_private_key(
-            pem_data,
-            password=None,
-            backend=default_backend()
-        )
-        return _private_key_cache
-    except Exception as e:
-        print(f"❌ CRITICAL: Identity Load Failed: {e}")
-        raise e
+    # 1. Load Identity (L2)
+    if not _identity_manager:
+        logger.info(f"🔐 Loading identity from Secret Manager: {SECRET_NAME}...")
+        try:
+            provider = GoogleSecretManagerProvider(
+                project_id=GCP_PROJECT_ID,
+                secret_name=SECRET_NAME
+            )
+            _identity_manager = IdentityManager(provider)
+        except Exception as e:
+            logger.critical(f"Failed to load identity: {e}")
+            raise
 
-def sign_message(message_body: dict) -> str:
-    """
-    Signs a JSON payload using Ed25519. Returns Base64 signature.
-    """
-    private_key = _get_key_from_secret_manager()
-    # Canonicalize JSON (Sort keys is mandatory for consistent signatures)
-    canonical_message = json.dumps(message_body, sort_keys=True).encode('utf-8')
-    signature = private_key.sign(canonical_message)
-    return base64.b64encode(signature).decode('utf-8')
+    # 2. Initialize Client
+    logger.info("🔌 Initializing Nexus Client...")
+    _nexus_client = NexusClient(
+        identity=_identity_manager,
+        directory_url=TRUST_DIRECTORY_URL,
+        orchestrator_url=ORCHESTRATOR_URL,
+        agent_id=AGENT_ID,
+        api_key=AGENT_API_KEY
+    )
+    return _nexus_client
 
-# --- BRIDGE FUNCTIONALITY (FR-O1) ---
+
+# --- BRIDGE FUNCTIONALITY (Called by Orchestrator) ---
 
 def run_bridge_transaction(service_id: str, payload: dict) -> dict:
     """
     Called by the Orchestrator (Bridge Endpoint).
-    Acts as a proxy: Signs the intent and sends it to the network.
+    Proxies a request from a No-Code tool to the ATP Network.
+
+    Args:
+        service_id: The target service UUID.
+        payload: The business logic data.
+
+    Returns:
+        The full transaction result from the provider.
     """
-    print(f"🌉 BRIDGE: Processing request for service {service_id}")
+    logger.info(f"🌉 BRIDGE: Processing request for service {service_id}")
 
-    # 1. Construct the ATP Envelope
-    body = {
-        "transaction_id": str(uuid4()),
-        "service_id": service_id,
-        "consumer_agent_id": AGENT_ID,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "payload": payload
-    }
-
-    # 2. Sign (L2 Security)
     try:
-        signature = sign_message(body)
+        client = get_nexus_client()
+
+        # Construct a minimal service contract (client.transact needs it for routing)
+        # In a full implementation, we might resolve it first, but here we just need the ID.
+        service_contract = {"service_id": service_id}
+
+        # Execute Transaction via SDK
+        # The SDK handles Envelope creation, Signing (L2), and Transport.
+        response = client.transact(service_contract, payload)
+
+        if response:
+            return response
+        else:
+            return {"status": "failed", "error": "Transaction returned no response."}
+
     except Exception as e:
-        return {"error": f"Signing failed: {str(e)}", "status": "failed"}
+        logger.error(f"Bridge Transaction Failed: {e}")
+        return {"status": "failed", "error": str(e)}
 
-    # 3. Execute (Loopback to Orchestrator A2A endpoint)
-    # Since we are inside the container, we call our own /v1/a2a/transact endpoint
-    # Note: In Cloud Run, we might need the full public URL or localhost if within same instance.
-    target_url = f"{ORCHESTRATOR_URL}/v1/a2a/transact"
-    if "localhost" in ORCHESTRATOR_URL:
-         # If generic default, try to use the one from env or fallback
-         pass
 
-    headers = {
-        "X-Agent-Signature": signature,
-        "Content-Type": "application/json",
-        "X-API-Key": AGENT_API_KEY
+# --- AGENT A LOGIC (Standalone Gemini Loop) ---
+
+def run_agent_loop():
+    """
+    Main loop for the Autonomous Agent (Agent A).
+    Negotiates with a supplier using Gemini.
+    """
+    if not GOOGLE_API_KEY:
+        logger.error("❌ GOOGLE_API_KEY not set. Cannot start Brain.")
+        return
+
+    client = get_nexus_client()
+
+    # 1. Discover Service
+    logger.info("🔍 Discovering 'flight' services...")
+    services = client.discover("booking:flight")
+
+    if not services:
+        logger.warning("No services found.")
+        return
+
+    target_service = services[0]
+    logger.info(f"🎯 Target Service Found: {target_service.get('metadata', {}).get('name')}")
+
+    # 2. Initialize Gemini
+    genai.configure(api_key=GOOGLE_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    chat = model.start_chat(history=[
+        {"role": "user", "parts": "You are a buyer agent. You want a flight to Paris. Budget: 600 EUR."}
+    ])
+
+    # 3. Negotiation Loop (Simplified)
+    # Ideally, this would loop based on Gemini's output.
+    # For this refactor, we demonstrate a single secure transaction.
+
+    user_intent = {
+        "intent": "negotiation.start",
+        "parameters": {
+            "destination": "CDG",
+            "date": "2025-10-12",
+            "budget": 600
+        }
     }
 
-    try:
-        # We use the public URL for the call to ensure full path routing
-        # For this specific setup, we trust the caller knows ORCHESTRATOR_URL or we use localhost
-        # Let's try a robust approach:
+    logger.info("🚀 Sending secure transaction...")
+    result = client.transact(target_service, user_intent)
 
-        print(f"pw sending to: {target_url}")
-        # We need to ensure we hit the correct endpoint.
-        # If this runs in the same process as orchestrator, it's a loopback network call.
-        response = requests.post(target_url, json=body, headers=headers, timeout=10)
+    logger.info(f"✅ Transaction Result: {json.dumps(result, indent=2)}")
 
-        try:
-            return response.json()
-        except json.JSONDecodeError:
-            return {"error": response.text, "status": "failed", "code": response.status_code}
-
-    except requests.exceptions.RequestException as e:
-        return {"error": f"Bridge Connection Failed: {str(e)}", "status": "failed"}
 
 if __name__ == "__main__":
-    print("Smart Agent Module Loaded.")
+    # If run directly, execute the Agent Loop
+    run_agent_loop()
