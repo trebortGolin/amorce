@@ -1,20 +1,27 @@
 # CI/CD configuration file for the 'natp' service (The Router)
 # FIX: Image name must be lowercase 'natp'
 
+# --- FIX CRITIQUE : DÉFINITION DE LA VARIABLE DE SUBSTITUTION ---
+substitutions:
+  _TAG_VERSION: ${COMMIT_SHA}
+# ----------------------------------------------------------------
+
 steps:
   # Step 1: Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:$COMMIT_SHA'
+      # MODIFIÉ : Utilise la variable personnalisée
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:${_TAG_VERSION}'
       - '.'
 
   # Step 2: Push the image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:$COMMIT_SHA'
+      # MODIFIÉ : Utilise la variable personnalisée
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:${_TAG_VERSION}'
 
   # Step 3: Deploy to Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -22,7 +29,8 @@ steps:
       - 'run'
       - 'deploy'
       - 'natp' # Service Name (Lowercase mandatory)
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:$COMMIT_SHA'
+      # MODIFIÉ : Utilise la variable personnalisée
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:${_TAG_VERSION}'
       - '--region=us-central1'
       - '--allow-unauthenticated'
       # Injection des variables d'environnement vitales pour la Prod
@@ -31,7 +39,8 @@ steps:
       # ou l'ajouter ici si tu l'acceptes dans le code source (déconseillé mais rapide).
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:$COMMIT_SHA'
+  # MODIFIÉ : Utilise la variable personnalisée
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:${_TAG_VERSION}'
 
 options:
   logging: CLOUD_LOGGING_ONLY
