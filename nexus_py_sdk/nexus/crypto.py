@@ -145,7 +145,8 @@ class IdentityManager:
             logger.warning(f"Signature verification failed: {e}")
             return False
 
-    def get_canonical_json_bytes(self, payload: dict) -> bytes:
+    @staticmethod
+    def get_canonical_json_bytes(payload: dict) -> bytes:
         """
         Returns the canonical JSON byte representation for signing.
         Strict: sort_keys=True, no whitespace.
