@@ -31,7 +31,7 @@ steps:
       - '--region=us-central1'
       - '--allow-unauthenticated'
       # ADDED: VPC Connector for Redis access
-      - '--vpc-connector=nexus-vpc-connector'
+      - '--vpc-connector=amorce-vpc-connector'
       # Injection of vital environment variables for Prod
       # REDIS_HOST updated to: 10.185.13.251
       - '--set-env-vars=TRUST_DIRECTORY_URL=https://amorce-trust-api-425870997313.us-central1.run.app,AGENT_API_KEY=sk-atp-amorce-dev-2024,AGENT_ID=e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a,GCP_PROJECT_ID=amorce-prod-rgosselin,SECRET_NAME=atp-agent-private-key,REDIS_HOST=10.185.13.251'

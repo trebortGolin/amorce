@@ -1,40 +1,247 @@
+# 🤖 Amorce Orchestrator
 
-<h1>🤖 amorce (SDK v1.0)</h1>amorce is the official reference implementation (Python / Flask) of the Agnostic Transaction Protocol (ATP). It provides a secure, "Zero-Trust" SDK for exposing LLMs in a controlled and verifiable manner.<hr><h2>🏛️ Architecture</h2>This repository is designed to be deployed as a containerized service (e.g., on Google Cloud Run) using the provided Dockerfile.orchestrator.py: 🔑 (The "Lock") The API layer (Flask). It handles authentication (X-ATP-Key), schema validation, and signature verification.
-smart_agent.py: 🧠 (The "Brain") The logic layer. It manages business logic, task execution, and calls to the LLM.
-agent-manifest.json: 📜 (The "Contract") The agent's public contract, compliant with the ATP specification.<hr><h2>🛡️ Security Model (Zero-Trust)</h2>Security is managed at two levels:🔑 Authentication (The Lock): The orchestrator blocks any request lacking a valid **X-API-Key** header (via the AGENT_API_KEY variable).
-✍️ Integrity (The Seal): The agent cryptographically signs all its responses (signed_task) using its private key (via the AGENT_PRIVATE_KEY variable). The client can then verify this signature using the public key provided in the /manifest.<hr><h2>🚀 Quick Start (Local)</h2><h3>1. Prerequisites</h3>Python 3.11+ (to match the production Dockerfile)A virtual environment (venv)<h3>2. Installation</h3># Clone the repository
-git clone [https://github.com/trebortgolin/amorce.git](https://github.com/trebortgolin/amorce.git)
+**Amorce orchestrator** is the reference implementation of the **Amorce Agent Transaction Protocol (AATP)**. It provides a secure, zero-trust orchestration layer for AI agent-to-agent transactions.
+
+---
+
+## 🏛️ Architecture
+
+The orchestrator is deployed as a containerized service on Google Cloud Run and consists of:
+
+### Core Components
+
+**`orchestrator.py`** 🔑 (The "Router")
+- Flask API layer handling L1 authentication (`X-API-Key`)
+- L2 cryptographic signature verification (Ed25519)
+- Rate limiting via Redis
+- Transaction routing to provider agents
+- Metering and logging to Firestore
+
+**`smart_agent.py`** 🧠 (The "Brain")
+- Agent logic layer with Gemini AI integration
+- Bridge endpoint for no-code tool integrations
+- Implements Amorce client for secure transactions
+
+### Dependencies
+
+- **Amorce Python SDK** (`amorce-sdk`) - Cryptographic primitives and client
+- **Google Cloud Services** - Firestore, Secret Manager, Cloud Run
+- **Redis** - Rate limiting and caching
+- **Flask** - Web framework
+
+---
+
+## 🚀 Quick Start (Local Development)
+
+### 1. Prerequisites
+
+- Python 3.11+
+- Virtual environment
+- Google Cloud Project with Firestore and Secret Manager enabled
+
+### 2. Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/trebortGolin/amorce.git
 cd amorce
 
-# Create and activate a virtual environment
+# Create and activate virtual environment
 python3 -m venv venv
 source venv/bin/activate
 
-# Install the dependencies
-# Install the dependencies
+# Install dependencies
 pip install -r requirements.txt
 
-# Install the local Nexus SDK
-pip install -e nexus_py_sdk
-<h3>3. Configuration (Environment Variables)</h3>The application is designed to "fail-fast" and will refuse to start if these variables are not set.Create a .env file at the project root, or export these variables:# .env
+# Install the Amorce SDK (from parent directory)
+pip install -e ../amorce_py_sdk
+```
 
-# 🔑 1. The API "lock" (used by orchestrator.py)
-# Secret key to authenticate with the API (must be in the **X-API-Key** header)
-AGENT_API_KEY="sk-atp-amorce-dev-..."
+### 3. Configuration
 
-# ✍️ 2. The agent "seal" (used by smart_agent.py)
-# Path (or content) of the Ed25519 private key used to sign responses.
-AGENT_PRIVATE_KEY="agent_private_key.pem"
+Create a `.env` file with the following variables:
 
-# 🧠 3. The LLM "brain" (used by smart_agent.py)
-# API key for Google Gemini, as our smart_agent uses google-generativeai
-GEMINI_API_KEY="AIzaSy..."
-<h3>4. Generate Keys (if they don't exist)</h3>Ensure you have agent_private_key.pem and agent_public_key.pem files at the root. Our code (smart_agent.py) uses the Ed25519 standard (not RSA).# (Generate the Ed25519 private key)
-openssl genpkey -algorithm Ed25519 -out agent_private_key.pem
+```bash
+# Trust Directory (Agent Registry)
+TRUST_DIRECTORY_URL="https://amorce-trust-api-425870997313.us-central1.run.app"
 
-# (Extract the corresponding public key)
-openssl pkey -in agent_private_key.pem -pubout -out agent_public_key.pem
-(Don't forget to copy the content of agent_public_key.pem into your agent-manifest.json)<h3>5. Launch (Local)</h3># Launch the Flask development server (local)
-flask --app orchestrator run --port 5000
-<hr><h2>☁️ Deployment (Production)</h2>This project is designed for containerized deployment. The provided Dockerfile handles the configuration.The command used by the Dockerfile to launch the server in production is:# Command (used in the Dockerfile)
-flask run --host=0.0.0.0 --port=5000
+# API Authentication
+AGENT_API_KEY="sk-atp-amorce-2025-<your-key>"
+
+# Agent Identity (for smart_agent.py)
+AGENT_ID="<your-agent-uuid>"
+GCP_PROJECT_ID="amorce-prod-rgosselin"
+SECRET_NAME="atp-agent-private-key"
+
+# LLM Integration (for smart_agent.py)
+GOOGLE_API_KEY="AIzaSy<your-gemini-key>"
+
+# Redis Configuration (optional for local dev)
+REDIS_HOST="localhost"
+REDIS_PORT="6379"
+```
+
+### 4. Launch Locally
+
+```bash
+# Start the orchestrator
+python orchestrator.py
+
+# The server will be available at http://127.0.0.1:8080
+```
+
+---
+
+## ☁️ Production Deployment (Google Cloud Run)
+
+### Build and Deploy
+
+The orchestrator is deployed using Cloud Build:
+
+```bash
+# Deploy using Cloud Build
+gcloud builds submit --config cloudbuild.yaml \
+  --project amorce-prod-rgosselin \
+  --substitutions=_TAG_VERSION=v2.0.0
+```
+
+### Environment Configuration
+
+The following environment variables are set in `cloudbuild.yaml`:
+
+- `TRUST_DIRECTORY_URL` - Agent registry endpoint
+- `AGENT_API_KEY` - API authentication key
+- `AGENT_ID` - Smart agent UUID
+- `GCP_PROJECT_ID` - Google Cloud project
+- `SECRET_NAME` - Private key in Secret Manager
+- `REDIS_HOST` - Internal Redis IP (via VPC connector)
+
+### VPC Configuration
+
+The orchestrator connects to Redis via VPC connector:
+- VPC Connector: `amorce-vpc-connector`
+- Redis IP: `10.185.13.251`
+
+---
+
+## 🛡️ Security Model (Zero-Trust)
+
+### L1: API Key Authentication
+
+```http
+POST /v1/a2a/transact
+X-API-Key: sk-atp-amorce-2025-<key>
+```
+
+The orchestrator validates the API key before processing requests.
+
+### L2: Cryptographic Signatures
+
+All transactions are signed with Ed25519 private keys:
+
+1. Consumer agent signs transaction payload
+2. Signature sent in `X-Agent-Signature` header
+3. Orchestrator fetches consumer's public key from Trust Directory
+4. Signature verified against canonical JSON payload
+5. Request routed to provider only if  signature valid
+
+### L3: Rate Limiting
+
+Redis-based rate limiting:
+- 10 requests per minute per agent ID
+- Fail-open design (allows traffic if Redis down)
+
+---
+
+## 📡 API Endpoints
+
+### Agent-to-Agent Transaction
+
+**POST** `/v1/a2a/transact`
+
+Routes transactions between agents with signature verification.
+
+**Headers:**
+- `X-API-Key` - Orchestrator API key
+- `X-Agent-Signature` - Ed25519 signature (base64)
+
+**Request Body:**
+```json
+{
+  "service_id": "srv_<uuid>",
+  "consumer_agent_id": "<agent-id>",
+  "payload": {
+    "intent": "book_reservation",
+    "params": {"date": "2025-12-01", "guests": 2}
+  },
+  "priority": "normal"
+}
+```
+
+### Bridge Endpoint (No-Code Tools)
+
+**POST** `/v1/amorce/bridge`
+
+Simplified endpoint for no-code integrations (Zapier, Make, etc.).
+
+---
+
+## 🔧 Development
+
+### Project Structure
+
+```
+amorce/
+├── orchestrator.py       # Main routing service
+├── smart_agent.py        # AI agent logic
+├── Dockerfile           # Container configuration
+├── cloudbuild.yaml      # CI/CD configuration
+├── requirements.txt     # Python dependencies
+└── amorce_py_sdk/      # Local Amorce SDK copy
+```
+
+### Running Tests
+
+```bash
+# Run unit tests (if available)
+python -m pytest tests/
+
+# Test endpoint locally
+curl -X POST http://localhost:8080/v1/a2a/transact \
+  -H "X-API-Key: sk-atp-amorce-dev" \
+  -H "X-Agent-Signature: <base64-signature>" \
+  -d '{"service_id": "srv_test", "consumer_agent_id": "test", "payload": {}}'
+```
+
+---
+
+## 📚 Related Projects
+
+- [amorce_py_sdk](https://github.com/trebortGolin/amorce_py_sdk) - Python SDK for AATP
+- [amorce-js-sdk](https://github.com/trebortGolin/amorce-js-sdk) - JavaScript SDK for AATP
+- [amorce-trust-directory](https://github.com/trebortGolin/amorce-trust-directory) - Agent registry
+- [amorce-console](https://github.com/trebortGolin/amorce-console) - Management console
+
+---
+
+## 📝 Protocol
+
+Implements **AATP v0.1.0** (Amorce Agent Transaction Protocol):
+- Ed25519 signatures
+- Canonical JSON serialization (RFC 8785)
+- Priority lanes (normal, high, critical)
+- Trust Directory verification
+
+---
+
+## 📄 License
+
+MIT License
+
+---
+
+## 🚀 Live Service
+
+**Production Endpoint:** https://natp-425870997313.us-central1.run.app
+
+**Status:** ✅ Running with Amorce SDK v2.0.0

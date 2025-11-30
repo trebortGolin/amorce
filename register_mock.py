@@ -2,7 +2,7 @@ import os
 import uuid
 import requests
 import json
-from nexus import IdentityManager, GoogleSecretManagerProvider
+from amorce import IdentityManager, GoogleSecretManagerProvider
 
 # --- Configuration ---
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "amorce-prod-rgosselin")
