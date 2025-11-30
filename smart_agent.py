@@ -1,4 +1,4 @@
-# --- SMART AGENT (Nexus NATP v1.4 - System Lib) ---
+# --- SMART AGENT (Amorce NATP v1.4 - System Lib) ---
 # STATUS: REFACTORED (Ticket-CODE-03)
 # Role:
 # 1. "Agent A" Logic (Gemini Brain)
@@ -6,7 +6,7 @@
 #
 # Changes:
 # - Replaced raw cryptography/requests with 'nexus' system library.
-# - Implements 'NexusClient' for all interactions.
+# - Implements 'AmorceClient' for all interactions.
 
 import os
 import json
@@ -15,7 +15,7 @@ import google.generativeai as genai
 from typing import Dict, Any, Optional
 
 # --- INFRASTRUCTURE: System Library Import ---
-from nexus import NexusClient, IdentityManager, GoogleSecretManagerProvider
+from amorce import AmorceClient, IdentityManager, GoogleSecretManagerProvider
 
 # --- Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,12 +38,12 @@ GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 # --- SINGLETONS ---
 _identity_manager: Optional[IdentityManager] = None
-_nexus_client: Optional[NexusClient] = None
+_nexus_client: Optional[AmorceClient] = None
 
 
-def get_nexus_client() -> NexusClient:
+def get_nexus_client() -> AmorceClient:
     """
-    Initializes and returns a singleton NexusClient.
+    Initializes and returns a singleton AmorceClient.
     Loads identity from Google Secret Manager if not already loaded.
     """
     global _identity_manager, _nexus_client
@@ -66,8 +66,8 @@ def get_nexus_client() -> NexusClient:
     # ----------------------------------------------
 
     # 2. Initialize Client
-    logger.info("🔌 Initializing Nexus Client...")
-    _nexus_client = NexusClient(
+    logger.info("🔌 Initializing Amorce Client...")
+    _nexus_client = AmorceClient(
         identity=_identity_manager,
         directory_url=TRUST_DIRECTORY_URL,
         orchestrator_url=ORCHESTRATOR_URL,

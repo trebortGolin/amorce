@@ -1,11 +1,12 @@
 """
-# --- ORCHESTRATOR (Nexus NATP v1.4 - System Lib) ---
+# --- ORCHESTRATOR (Amorce AATP v1.4 - System Lib) ---
 # STATUS: REFACTORED (Ticket-CODE-02)
 # Changes:
 # - Removed raw 'cryptography' imports.
-# - Now imports 'nexus' as a system library.
+# - Now imports 'amorce' as a system library.
 # - Uses IdentityManager.verify_signature() for L2.
 # - Uses IdentityManager.get_canonical_json_bytes() for consistency.
+# - Rebranded from Nexus/NATP to Amorce/AATP
 """
 
 import os
@@ -23,10 +24,10 @@ from flask import Flask, request, jsonify, g
 
 # --- INFRASTRUCTURE: System Library Import ---
 # We no longer rely on local files for core logic.
-from nexus import IdentityManager, NexusEnvelope
+from amorce import IdentityManager, AmorceEnvelope
 
 # --- Modules ---
-# 'smart_agent' must also be refactored to use 'nexus' in the next step.
+# 'smart_agent' must also be refactored to use 'amorce' in the next step.
 import smart_agent as agent
 
 # --- Configuration ---
@@ -269,5 +270,5 @@ def nexus_bridge():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    logging.info(f"Starting Nexus Orchestrator on port {port}...")
+    logging.info(f"Starting Amorce Orchestrator on port {port}...")
     app.run(debug=False, host='0.0.0.0', port=port)

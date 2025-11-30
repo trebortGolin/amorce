@@ -7,4 +7,3 @@ google-cloud-secret-manager
 redis
 gunicorn
 pydantic
-./nexus_py_sdk
