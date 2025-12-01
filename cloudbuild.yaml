@@ -31,11 +31,11 @@ steps:
       - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/natp:${_TAG_VERSION}'
       - '--region=us-central1'
       - '--allow-unauthenticated'
-      # ADDED: VPC Connector for Redis access (TEMPORARILY DISABLED - Redis will fail-open)
-      # - '--vpc-connector=amorce-vpc-connector'
+      # VPC Connector for Redis access (ENABLED)
+      - '--vpc-connector=amorce-vpc-connector'
       # Injection of vital environment variables for Prod (Cloud Mode)
       # CRITICAL: AMORCE_MODE=cloud enables Trust Directory + Firestore + Redis
-      - '--set-env-vars=AMORCE_MODE=cloud,TRUST_DIRECTORY_URL=https://amorce-trust-api-425870997313.us-central1.run.app,AGENT_API_KEY=sk-atp-amorce-dev-2024,AGENT_ID=e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a,GCP_PROJECT_ID=amorce-prod-rgosselin,SECRET_NAME=atp-agent-private-key'
+      - '--set-env-vars=AMORCE_MODE=cloud,TRUST_DIRECTORY_URL=https://amorce-trust-api-425870997313.us-central1.run.app,AGENT_API_KEY=sk-atp-amorce-dev-2024,AGENT_ID=e4b0c7c8-4b9f-4b0d-8c1a-2b9d1c9a0c1a,GCP_PROJECT_ID=amorce-prod-rgosselin,SECRET_NAME=atp-agent-private-key,REDIS_HOST=10.185.13.251'
       # NOTE: GOOGLE_API_KEY can be added manually in Cloud Run console for security
 
 images:
