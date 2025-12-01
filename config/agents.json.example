@@ -1,0 +1,24 @@
+{
+  "agent-local-001": {
+    "agent_id": "agent-local-001",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAMOcD9J2p7qH3wZ5vK8xR4tL6mN9jF2sP1kQ8hV7uE3o=\n-----END PUBLIC KEY-----",
+    "metadata": {
+      "name": "Local Test Agent",
+      "description": "Example agent for standalone mode testing",
+      "api_endpoint": "http://localhost:500",
+      "category": "PRODUCTIVITY",
+      "status": "active"
+    }
+  },
+  "agent-local-002": {
+    "agent_id": "agent-local-002",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQZxR3N8hF6vL2tM9sK4jP1wE7bY5nU3zX8vA6cR9oD4=\n-----END PUBLIC KEY-----",
+    "metadata": {
+      "name": "Local Restaurant Agent",
+      "description": "Example restaurant booking agent",
+      "api_endpoint": "http://localhost:5002",
+      "category": "TRAVEL",
+      "status": "active"
+    }
+  }
+}

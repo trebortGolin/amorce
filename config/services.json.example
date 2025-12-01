@@ -1,0 +1,20 @@
+{
+  "srv-local-001": {
+    "service_id": "srv-local-001",
+    "provider_agent_id": "agent-local-001",
+    "metadata": {
+      "name": "Greeter Service",
+      "description": "Simple greeting service for testing",
+      "service_path_template": "/greet"
+    }
+  },
+  "srv-local-002": {
+    "service_id": "srv-local-002",
+    "provider_agent_id": "agent-local-002",
+    "metadata": {
+      "name": "Restaurant Booking",
+      "description": "Make restaurant reservations",
+      "service_path_template": "/reservations"
+    }
+  }
+}

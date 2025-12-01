@@ -1,167 +1,122 @@
 """
-# --- ORCHESTRATOR (Amorce AATP v1.4 - System Lib) ---
-# STATUS: REFACTORED (Ticket-CODE-02)
-# Changes:
-# - Removed raw 'cryptography' imports.
-# - Now imports 'amorce' as a system library.
-# - Uses IdentityManager.verify_signature() for L2.
-# - Uses IdentityManager.get_canonical_json_bytes() for consistency.
-# - Rebranded from Nexus/NATP to Amorce/AATP
+Amorce Orchestrator - Standalone-First Architecture
+
+The reference implementation of the Amorce Agent Transaction Protocol (AATP).
+Supports two modes:
+- standalone: Uses local files, no cloud dependencies
+- cloud: Connects to Amorce Trust Directory and cloud services
+
+Set via AMORCE_MODE environment variable (defaults to standalone).
 """
 
 import os
 import logging
 import requests
-import time
 from datetime import datetime, timezone
 from functools import wraps
-from typing import Callable, Optional, Dict, Tuple
+from typing import Callable
 
-# --- External Libs ---
-from google.cloud import firestore
-import redis
 from flask import Flask, request, jsonify, g
 
-# --- INFRASTRUCTURE: System Library Import ---
-# We no longer rely on local files for core logic.
-from amorce import IdentityManager, AmorceEnvelope
+# --- AMORCE SDK ---
+from amorce import IdentityManager
 
-# --- Modules ---
-# 'smart_agent' must also be refactored to use 'amorce' in the next step.
-import smart_agent as agent
+# --- CORE ---
+from core.interfaces import IAgentRegistry, IStorage, IRateLimiter
+from core.protocol import AmorceProtocol, MessageValidator
 
-# --- Configuration ---
+# ---import Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
-TRUST_DIRECTORY_URL = os.environ.get("TRUST_DIRECTORY_URL")
+# --- MODE SELECTION ---
+AMORCE_MODE = os.environ.get("AMORCE_MODE", "standalone")
+logger.info(f"🚀 Starting Amorce Orchestrator in {AMORCE_MODE.upper()} mode")
+
+# --- DEPENDENCY INJECTION ---
+# Based on mode, inject appropriate implementations
+
+registry: IAgentRegistry
+storage: IStorage
+limiter: IRateLimiter
+
+if AMORCE_MODE == "cloud":
+    # Cloud Mode: Amorce Trust Directory + GCP services
+    from adapters.cloud.directory_registry import CloudDirectoryRegistry
+    from adapters.cloud.firestore_storage import FirestoreStorage
+    from adapters.cloud.redis_limiter import RedisRateLimiter
+    
+    # Required environment variables for cloud mode
+    TRUST_DIRECTORY_URL = os.environ.get("TRUST_DIRECTORY_URL")
+    if not TRUST_DIRECTORY_URL:
+        raise ValueError("Cloud mode requires TRUST_DIRECTORY_URL environment variable")
+    
+    # Initialize cloud adapters
+    registry = CloudDirectoryRegistry(TRUST_DIRECTORY_URL)
+    
+    # Storage (Firestore)
+    try:
+        project_id = os.environ.get("GCP_PROJECT_ID", "amorce-prod-rgosselin")
+        storage = FirestoreStorage(project_id)
+        logger.info("✅ Firestore storage enabled")
+    except Exception as e:
+        logger.warning(f"⚠️ Firestore unavailable: {e}")
+        # Fallback to no-op storage
+        from adapters.local.sqlite_storage import LocalSQLiteStorage
+        storage = LocalSQLiteStorage()
+    
+    # Rate Limiter (Redis)
+    try:
+        redis_host = os.environ.get("REDIS_HOST", "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT", 6379))
+        limiter = RedisRateLimiter(redis_host, redis_port, fail_open=True)
+        logger.info("✅ Redis rate limiter enabled")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis unavailable: {e}")
+        from adapters.local.noop_limiter import NoOpRateLimiter
+        limiter = NoOpRateLimiter()
+
+else:
+    # Standalone Mode: Local files, no cloud dependencies
+    from adapters.local.file_registry import LocalFileRegistry
+    from adapters.local.sqlite_storage import LocalSQLiteStorage
+    from adapters.local.noop_limiter import NoOpRateLimiter
+    
+    registry = LocalFileRegistry()
+    storage = LocalSQLiteStorage()
+    limiter = NoOpRateLimiter()
+    
+    logger.info("✅ Standalone mode: Using local files")
+
+# --- L1 AUTHENTICATION ---
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY")
-REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
-
-if not TRUST_DIRECTORY_URL or not AGENT_API_KEY:
-    logging.warning("CRITICAL: Missing Security Env Vars (TRUST_DIRECTORY_URL or AGENT_API_KEY).")
-
-# --- DB CONNECTIONS ---
-
-# 1. Firestore (Metering)
-try:
-    project_id = os.environ.get("GCP_PROJECT_ID", "amorce-prod-rgosselin")
-    db_client = firestore.Client(project=project_id)
-    logging.info("✅ Firestore (Ledger): Connected")
-except Exception as e:
-    logging.warning(f"⚠️ Firestore Error: {e} (Metering Disabled)")
-    db_client = None
-
-# 2. Redis (Rate Limiting)
-try:
-    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, socket_connect_timeout=0.1)
-    redis_client.ping()
-    logging.info("✅ Redis (Rate Limit): Connected")
-except Exception as e:
-    logging.warning(f"⚠️ Redis Error: {e} (Rate Limiting Disabled - Traffic Allowed)")
-    redis_client = None
-
-
-# --- DECORATORS & HELPERS ---
 
 def require_api_key(f: Callable) -> Callable:
     """
     L1 Security: API Key Validation.
+    Optional in standalone mode, required in cloud mode.
     """
-
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not AGENT_API_KEY:
+        # In standalone mode, API key is optional
+        if AMORCE_MODE == "standalone" and not AGENT_API_KEY:
             return f(*args, **kwargs)
-
-        key = request.headers.get('X-API-Key')
-        if not key or key != AGENT_API_KEY:
-            return jsonify({"error": "Unauthorized"}), 401
-
+        
+        # In cloud mode or if API key is set, validate it
+        if AGENT_API_KEY:
+            key = request.headers.get('X-API-Key')
+            if not key or key != AGENT_API_KEY:
+                return jsonify(AmorceProtocol.create_error_response(
+                    AmorceProtocol.ERROR_UNAUTHORIZED,
+                    "Invalid or missing API key"
+                )), 401
+        
         g.auth_source = "Orchestrator"
         return f(*args, **kwargs)
-
+    
     return decorated_function
-
-
-# Cache Agent Identity: {agent_id: (pem_string, timestamp)}
-PUBLIC_KEY_CACHE: Dict[str, Tuple[str, float]] = {}
-
-
-def get_public_key_pem(agent_id: str) -> Optional[str]:
-    """
-    Fetches the Public Key (PEM) from the Trust Directory.
-    Implements P-1: In-memory cache with a 5-minute TTL.
-    """
-    cached = PUBLIC_KEY_CACHE.get(agent_id)
-    if cached and (time.time() - cached[1]) < 300:
-        return cached[0]
-
-    if not TRUST_DIRECTORY_URL:
-        return None
-
-    try:
-        # P-1: Lookup in Trust Directory
-        resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{agent_id}", timeout=10)
-
-        if resp.status_code != 200:
-            logging.warning(f"Trust Directory lookup failed for {agent_id}: {resp.status_code}")
-            return None
-
-        data = resp.json()
-        if data.get("status") != "active":
-            logging.warning(f"Agent {agent_id} is not active.")
-            return None
-
-        pem = data.get("public_key")
-
-        # Cache the PEM string directly
-        PUBLIC_KEY_CACHE[agent_id] = (pem, time.time())
-        return pem
-
-    except Exception as e:
-        logging.error(f"Error fetching public key: {e}")
-        return None
-
-
-def check_rate_limit(agent_id: str, limit: int = 10, window: int = 60):
-    """
-    (FR-O4) Rate Limiting via Redis.
-    Rule: Max 10 requests per minute per Agent ID.
-    Fail-Open: If Redis is down, we allow the traffic.
-    """
-    if not redis_client:
-        return
-
-    key = f"rate_limit:{agent_id}"
-    try:
-        current_count = redis_client.incr(key)
-        if current_count == 1:
-            redis_client.expire(key, window)
-
-        if current_count > limit:
-            logging.warning(f"⛔ RATE LIMIT EXCEEDED for {agent_id}: {current_count}/{limit}")
-            raise Exception(f"Rate limit exceeded ({limit} req/{window}s)")
-
-    except redis.RedisError as e:
-        logging.error(f"Redis Runtime Error: {e}")
-
-
-def log_ledger(tx_data: dict):
-    """
-    Async logging to Firestore for metering/billing.
-    """
-    if not db_client:
-        return
-    try:
-        db_client.collection("ledger").document(tx_data["transaction_id"]).set({
-            **tx_data,
-            "ingested_at": firestore.SERVER_TIMESTAMP
-        })
-        logging.info("💰 Ledger: Transaction recorded.")
-    except Exception as e:
-        logging.error(f"Ledger Write Error: {e}")
 
 
 # --- ENDPOINTS ---
@@ -170,84 +125,138 @@ def log_ledger(tx_data: dict):
 @require_api_key
 def a2a_transact():
     """
-    The Core Router.
-    Verifies L2 Signature using Nexus SDK and routes to Provider.
+    The Core Router for Agent-to-Agent Transactions.
+    
+    Validates L2 signatures and routes transactions to providers.
     """
     try:
         body = request.json
-        sig = request.headers.get('X-Agent-Signature')
+        
+        # 1. PROTOCOL VALIDATION
+        is_valid, error_msg = AmorceProtocol.validate_transaction_request(body)
+        if not is_valid:
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_BAD_REQUEST,
+                error_msg
+            )), 400
+        
         consumer_id = body.get("consumer_agent_id")
-
-        if not all([body, sig, consumer_id]):
-            return jsonify({"error": "Bad Request: Missing body, signature, or consumer_id"}), 400
-
-        # 1. RATE LIMITING (FR-O4)
+        
+        # 2. HEADER VALIDATION
+        is_valid, error_msg = MessageValidator.validate_headers(request.headers)
+        if not is_valid:
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_BAD_REQUEST,
+                error_msg
+            )), 400
+        
+        sig = request.headers.get('X-Agent-Signature')
+        
+        # 3. RATE LIMITING
         try:
-            check_rate_limit(consumer_id)
+            limiter.check_limit(consumer_id)
         except Exception as e:
-            return jsonify({"error": str(e)}), 429
-
-        # 2. SECURITY (L2) - REFACTORED via SDK
-        # Fetch key from directory
-        consumer_pub_key_pem = get_public_key_pem(consumer_id)
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_RATE_LIMIT,
+                str(e)
+            )), 429
+        
+        # 4. AGENT LOOKUP (via injected registry)
+        consumer_agent = registry.find_agent(consumer_id)
+        if not consumer_agent:
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_FORBIDDEN,
+                f"Agent {consumer_id} not found or inactive"
+            )), 403
+        
+        consumer_pub_key_pem = consumer_agent.get("public_key")
         if not consumer_pub_key_pem:
-            return jsonify({"error": f"Identity Verification Failed: Agent {consumer_id} unknown."}), 403
-
-        # Canonicalize the body using the SDK's standard method
-        # This ensures we hash the exact same bytes that the agent signed.
-        # (This replaces the manual json.dumps logic)
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_FORBIDDEN,
+                "Agent public key not available"
+            )), 403
+        
+        # 5. SIGNATURE VERIFICATION (L2 Security)
         canonical_bytes = IdentityManager.get_canonical_json_bytes(body)
-
-        # Verify Signature using SDK
         is_valid = IdentityManager.verify_signature(
             public_key_pem=consumer_pub_key_pem,
             data=canonical_bytes,
             signature_b64=sig
         )
-
+        
         if not is_valid:
-            logging.warning(f"⛔ Invalid Signature for agent {consumer_id}")
-            return jsonify({"error": "Invalid Signature"}), 403
-
-        # 3. ROUTING (P-6)
+            logger.warning(f"⛔ Invalid signature for agent {consumer_id}")
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_INVALID_SIGNATURE,
+                "Signature verification failed"
+            )), 403
+        
+        # 6. SERVICE ROUTING
         srv_id = body.get("service_id")
-
-        # Resolve Service ID -> Provider URL
-        srv_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/services/{srv_id}", timeout=10)
-        if srv_resp.status_code != 200:
-            return jsonify({"error": "Service Not Found"}), 404
-
-        contract = srv_resp.json()
-        provider_id = contract['provider_agent_id']
-
-        # Resolve Provider -> API Endpoint
-        prov_resp = requests.get(f"{TRUST_DIRECTORY_URL}/api/v1/lookup/{provider_id}", timeout=10)
-        if prov_resp.status_code != 200:
-            return jsonify({"error": "Provider Not Found"}), 404
-
-        # Execute Request against Provider
-        endpoint = prov_resp.json()["metadata"]["api_endpoint"]
-        # Allow formatting path with payload data (e.g. /products/{id})
-        path_template = contract["metadata"]["service_path_template"]
+        
+        # Lookup service contract (via injected registry)
+        service_contract = registry.find_service(srv_id)
+        if not service_contract:
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_NOT_FOUND,
+                f"Service {srv_id} not found"
+            )), 404
+        
+        provider_id = service_contract.get("provider_agent_id")
+        
+        # Lookup provider agent (via injected registry)
+        provider_agent = registry.find_agent(provider_id)
+        if not provider_agent:
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_NOT_FOUND,
+                f"Provider agent {provider_id} not found"
+            )), 404
+        
+        # Execute request against provider
+        endpoint = provider_agent.get("metadata", {}).get("api_endpoint")
+        path_template = service_contract.get("metadata", {}).get("service_path_template", "")
         path = path_template.format(**body.get("payload", {}))
-
-        logging.info(f"Routing to Provider: {endpoint}{path}")
-        ext_resp = requests.post(f"{endpoint}{path}", json={"data": body.get("payload", {})}, timeout=10)
-
-        # 4. METERING (FR-O3)
-        result = {
-            "transaction_id": body.get("transaction_id"),
-            "status": "success",
+        
+        logger.info(f"Routing to Provider: {endpoint}{path}")
+        
+        try:
+            ext_resp = requests.post(
+                f"{endpoint}{path}",
+                json={"data": body.get("payload", {})},
+                timeout=10
+            )
+        except requests.RequestException as e:
+            logger.error(f"Provider request failed: {e}")
+            return jsonify(AmorceProtocol.create_error_response(
+                AmorceProtocol.ERROR_INTERNAL,
+                f"Failed to reach provider: {str(e)}"
+            )), 500
+        
+        # 7. METERING (via injected storage)
+        transaction_id = body.get("transaction_id", f"tx_{datetime.now(timezone.utc).timestamp()}")
+        tx_data = {
+            "transaction_id": transaction_id,
+            "consumer_agent_id": consumer_id,
+            "service_id": srv_id,
+            "status": "success" if ext_resp.status_code == 200 else "failed",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "result": ext_resp.json() if ext_resp.status_code == 200 else {"error": ext_resp.text}
         }
-        log_ledger(result)
-
-        return jsonify(result), ext_resp.status_code
-
+        storage.log_transaction(tx_data)
+        
+        # 8. RESPONSE
+        result = ext_resp.json() if ext_resp.status_code == 200 else {"error": ext_resp.text}
+        return jsonify(AmorceProtocol.create_success_response(
+            transaction_id=transaction_id,
+            result=result
+        )), ext_resp.status_code
+        
     except Exception as e:
-        logging.error(f"System Error in a2a_transact: {e}")
-        return jsonify({"error": "Internal Orchestrator Error"}), 500
+        logger.error(f"System error in a2a_transact: {e}", exc_info=True)
+        return jsonify(AmorceProtocol.create_error_response(
+            AmorceProtocol.ERROR_INTERNAL,
+            "Internal orchestrator error"
+        )), 500
 
 
 @app.route('/v1/nexus/bridge', methods=['POST'])
@@ -255,20 +264,37 @@ def a2a_transact():
 def nexus_bridge():
     """
     Bridge endpoint for No-Code tools.
-    Delegates to smart_agent logic (requires smart_agent to be refactored too).
+    Delegates to smart_agent logic.
+    
+    Note: This endpoint will be deprecated in favor of direct agent integration.
     """
     try:
-        # Pass request to the internal agent logic
+        import smart_agent as agent
+        
         return jsonify(agent.run_bridge_transaction(
             request.json.get("service_id"),
             request.json.get("payload")
         )), 200
     except Exception as e:
-        logging.error(f"Bridge Error: {e}")
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Bridge error: {e}")
+        return jsonify(AmorceProtocol.create_error_response(
+            AmorceProtocol.ERROR_INTERNAL,
+            str(e)
+        )), 500
+
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint."""
+    return jsonify({
+        "status": "healthy",
+        "mode": AMORCE_MODE,
+        "version": AmorceProtocol.VERSION
+    }), 200
 
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    logging.info(f"Starting Amorce Orchestrator on port {port}...")
+    logger.info(f"🚀 Amorce Orchestrator starting on port {port}")
+    logger.info(f"📍 Mode: {AMORCE_MODE}")
     app.run(debug=False, host='0.0.0.0', port=port)
