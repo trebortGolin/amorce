@@ -1,0 +1,14 @@
+{
+    "builds": [
+        {
+            "src": "orchestrator.py",
+            "use": "@vercel/python"
+        }
+    ],
+    "routes": [
+        {
+            "src": "/(.*)",
+            "dest": "orchestrator.py"
+        }
+    ]
+}
