@@ -1,0 +1,54 @@
+{
+    "mcp_servers": [
+        {
+            "name": "filesystem",
+            "command": [
+                "npx",
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "/private/tmp"
+            ],
+            "agent_id": "agent-mcp-filesystem",
+            "description": "File system operations in /tmp directory",
+            "require_hitl_for": [
+                "write_file",
+                "delete_file",
+                "move_file",
+                "edit_file"
+            ],
+            "enabled": false,
+            "port": 5001
+        },
+        {
+            "name": "brave_search",
+            "command": [
+                "npx",
+                "@modelcontextprotocol/server-brave-search"
+            ],
+            "agent_id": "agent-mcp-brave-search",
+            "description": "Web search using Brave Search API",
+            "require_hitl_for": [],
+            "enabled": false,
+            "port": 5002,
+            "env": {
+                "BRAVE_API_KEY": "${BRAVE_API_KEY}"
+            }
+        },
+        {
+            "name": "postgres",
+            "command": [
+                "npx",
+                "@modelcontextprotocol/server-postgres",
+                "postgresql://localhost/mydb"
+            ],
+            "agent_id": "agent-mcp-postgres",
+            "description": "PostgreSQL database access",
+            "require_hitl_for": [
+                "query",
+                "execute"
+            ],
+            "enabled": false,
+            "port": 5003
+        }
+    ]
+}

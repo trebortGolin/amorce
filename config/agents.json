@@ -5,19 +5,28 @@
     "metadata": {
       "name": "Local Test Agent",
       "description": "Example agent for standalone mode testing",
-      "api_endpoint": "http://localhost:500",
+      "api_endpoint": "http://localhost:5000",
       "category": "PRODUCTIVITY",
       "status": "active"
     }
   },
-  "agent-local-002": {
-    "agent_id": "agent-local-002",
-    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQZxR3N8hF6vL2tM9sK4jP1wE7bY5nU3zX8vA6cR9oD4=\n-----END PUBLIC KEY-----",
+  "4436305b-45ec-40ef-afe0-acf6a4c0a8e6": {
+    "agent_id": "4436305b-45ec-40ef-afe0-acf6a4c0a8e6",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAFtMaSC7MkL8XNyv0/lGZdZDnD8NZVi1fJHDgxcpY7Ng=\n-----END PUBLIC KEY-----",
     "metadata": {
-      "name": "Local Restaurant Agent",
-      "description": "Example restaurant booking agent",
-      "api_endpoint": "http://localhost:5002",
-      "category": "TRAVEL",
+      "name": "Le Petit Bistro",
+      "description": "Charming French bistro offering authentic Parisian cuisine",
+      "api_endpoint": "http://localhost:8001/api/v1",
+      "status": "active"
+    }
+  },
+  "e5984a58fc849f83dedbec4f35a3d5b4bc9ecf266d8bcdeb4f0eec7b1d4dd613": {
+    "agent_id": "e5984a58fc849f83dedbec4f35a3d5b4bc9ecf266d8bcdeb4f0eec7b1d4dd613",
+    "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA/oA+gh3P3C4mVrM+07clpIX5WK4dzZG/WdUekq+ENls=\n-----END PUBLIC KEY-----",
+    "metadata": {
+      "name": "Sarah - Executive Assistant",
+      "description": "AI Executive Assistant powered by Amorce",
+      "api_endpoint": "http://localhost:9000",
       "status": "active"
     }
   }

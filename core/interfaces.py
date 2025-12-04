@@ -103,6 +103,65 @@ class IStorage(ABC):
             Transaction data or None if not found.
         """
         pass
+    
+    @abstractmethod
+    def store_approval(self, approval_data: Dict[str, Any]) -> None:
+        """
+        Store an approval request for HITL functionality.
+        
+        Args:
+            approval_data: Approval data including:
+                - approval_id: str
+                - transaction_id: str
+                - agent_id: str
+                - summary: str
+                - status: str
+                - etc.
+        """
+        pass
+    
+    @abstractmethod
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve an approval by ID.
+        
+        Args:
+            approval_id: The approval identifier
+            
+        Returns:
+            Approval data or None if not found.
+        """
+        pass
+    
+    # --- Payment Methods (Phase 3 - Dormant) ---
+    
+    @abstractmethod
+    def store_payment(self, payment_data: Dict[str, Any]) -> None:
+        """
+        Store a payment record (Phase 3).
+        
+        Args:
+            payment_data: Payment data including:
+                - payment_id: str
+                - transaction_id: str
+                - amount: float
+                - status: str
+                - etc.
+        """
+        pass
+    
+    @abstractmethod
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a payment by ID (Phase 3).
+        
+        Args:
+            payment_id: The payment identifier
+            
+        Returns:
+            Payment data or None if not found.
+        """
+        pass
 
 
 class IRateLimiter(ABC):

@@ -354,6 +354,90 @@ Routes transactions between agents with signature verification.
 }
 ```
 
+### Human-in-the-Loop (HITL) Approvals
+
+Amorce includes built-in support for human oversight of agent decisions.
+
+#### Create Approval Request
+
+**POST** `/api/v1/approvals`
+
+Create an approval request that requires human review.
+
+**Request Body:**
+```json
+{
+  "approval_id": "apr_custom_id",
+  "transaction_id": "tx_123",
+  "summary": "Book restaurant for 4 guests at Le Petit Bistro",
+  "details": {
+    "restaurant": "Le Petit Bistro",
+    "guests": 4,
+    "date": "2025-12-05",
+    "time": "19:00"
+  },
+  "timeout_seconds": 300
+}
+```
+
+**Response:**
+```json
+{
+  "approval_id": "apr_custom_id",
+  "status": "pending",
+  "created_at": "2025-12-02T17:00:00Z",
+  "expires_at": "2025-12-02T17:05:00Z"
+}
+```
+
+#### Get Approval Status
+
+**GET** `/api/v1/approvals/{approval_id}`
+
+Check the current status of an approval request.
+
+**Response:**
+```json
+{
+  "approval_id": "apr_custom_id",
+  "transaction_id": "tx_123",
+  "status": "approved",
+  "summary": "Book restaurant for 4 guests",
+  "details": {...},
+  "decision": "approve",
+  "approved_by": "user@example.com",
+  "approved_at": "2025-12-02T17:02:00Z",
+  "comments": "Looks good"
+}
+```
+
+**Status values:** `pending`, `approved`, `rejected`, `expired`
+
+#### Submit Approval Decision
+
+**POST** `/api/v1/approvals/{approval_id}/submit`
+
+Submit a human decision for an approval request.
+
+**Request Body:**
+```json
+{
+  "decision": "approve",
+  "approved_by": "user@example.com",
+  "comments": "Approved for business lunch"
+}
+```
+
+**Response:**
+```json
+{
+  "approval_id": "apr_custom_id",
+  "status": "approved",
+  "approved_at": "2025-12-02T17:02:00Z"
+}
+```
+
+
 ---
 
 ## 🚀 Advanced: Production Deployment
@@ -438,6 +522,47 @@ Implements **AATP v1.0.0** (Amorce Agent Transaction Protocol):
 - Canonical JSON serialization (RFC 8785)
 - Trust Directory verification
 - Fail-safe error handling
+
+---
+
+
+---
+
+## 🔌 MCP Wrapper (NEW)
+
+**Access 80+ Model Context Protocol servers through Amorce with signatures + HITL**
+
+The MCP wrapper allows you to expose [Model Context Protocol](https://modelcontextprotocol.io) servers as Amorce agents, adding cryptographic security and human oversight to MCP tool calls.
+
+### Quick Start
+
+```bash
+# 1. Configure MCP server in config/mcp_servers.json
+# 2. Start wrapper
+python3 run_mcp_wrappers.py filesystem
+
+# 3. Call MCP tools via Amorce
+from amorce.mcp_helpers import MCPToolClient
+
+mcp = MCPToolClient(identity)
+result = mcp.call_tool('filesystem', 'read_file', {'path': '/tmp/test.txt'})
+```
+
+### Features
+
+- ✅ **Security:** Ed25519 signatures on all MCP tool calls
+- ✅ **HITL:** Human approval for sensitive operations (writes, deletes)
+- ✅ **Ecosystem:** Access to 80+ MCP servers (filesystem, search, databases)
+- ✅ **Audit:** All tool calls logged via Amorce
+
+### Available MCP Servers
+
+- **Filesystem** - File operations with HITL for writes
+- **Brave Search** - Web search
+- **PostgreSQL** - Database access with approval
+- **[80+ more](https://github.com/modelcontextprotocol/servers)**
+
+📚 **Full Documentation:** [docs/MCP_WRAPPER.md](docs/MCP_WRAPPER.md)
 
 ---
 

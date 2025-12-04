@@ -25,6 +25,9 @@ from amorce import IdentityManager
 from core.interfaces import IAgentRegistry, IStorage, IRateLimiter
 from core.protocol import AmorceProtocol, MessageValidator
 
+# --- HITL Approval Routes ---
+from api.approval_routes import approval_bp, init_approval_routes
+
 # ---import Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -89,6 +92,11 @@ else:
     limiter = NoOpRateLimiter()
     
     logger.info("✅ Standalone mode: Using local files")
+
+# --- Initialize HITL Approval Routes ---
+init_approval_routes(storage)
+app.register_blueprint(approval_bp)
+logger.info("✅ HITL approval routes registered")
 
 # --- L1 AUTHENTICATION ---
 AGENT_API_KEY = os.environ.get("AGENT_API_KEY")

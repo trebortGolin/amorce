@@ -84,3 +84,91 @@ class FirestoreStorage(IStorage):
         except Exception as e:
             logger.error(f"Failed to retrieve transaction from Firestore: {e}")
             return None
+    
+    def store_approval(self, approval_data: Dict[str, Any]) -> None:
+        """
+        Store an approval request in Firestore.
+        
+        Args:
+            approval_data: Approval data dictionary
+        """
+        try:
+            approval_id = approval_data.get("approval_id")
+            if not approval_id:
+                logger.error("Cannot store approval without approval_id")
+                return
+            
+            doc_ref = self.db_client.collection("approvals").document(approval_id)
+            doc_ref.set({
+                **approval_data,
+                "updated_at": firestore.SERVER_TIMESTAMP
+            })
+            
+            logger.debug(f"Approval stored in Firestore: {approval_id}")
+        except Exception as e:
+            logger.error(f"Failed to store approval in Firestore: {e}")
+            # Don't raise - storage failures shouldn't break the flow
+    
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve an approval from Firestore.
+        
+        Args:
+            approval_id: The approval identifier
+            
+        Returns:
+            Approval data or None if not found
+        """
+        try:
+            doc_ref = self.db_client.collection("approvals").document(approval_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return None
+            
+            return doc.to_dict()
+        except Exception as e:
+            logger.error(f"Failed to retrieve approval from Firestore: {e}")
+            return None
+    
+    # --- Payment Methods (Phase 3 - Dormant) ---
+    
+    def store_payment(self, payment_data: Dict[str, Any]) -> None:
+        """
+        Store a payment record in Firestore (Phase 3 feature - dormant).
+        
+        Collection exists but feature is not enabled yet.
+        """
+        try:
+            payment_id = payment_data.get("payment_id")
+            if not payment_id:
+                logger.error("Cannot store payment without payment_id")
+                return
+            
+            doc_ref = self.db_client.collection("payments").document(payment_id)
+            doc_ref.set({
+                **payment_data,
+                "updated_at": firestore.SERVER_TIMESTAMP
+            })
+            
+            logger.debug(f"Payment stored in Firestore: {payment_id}")
+        except Exception as e:
+            logger.error(f"Failed to store payment in Firestore: {e}")
+    
+    def get_payment(self, payment_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a payment from Firestore (Phase 3 feature - dormant).
+        
+        Collection exists but feature is not enabled yet.
+        """
+        try:
+            doc_ref = self.db_client.collection("payments").document(payment_id)
+            doc = doc_ref.get()
+            
+            if not doc.exists:
+                return None
+            
+            return doc.to_dict()
+        except Exception as e:
+            logger.error(f"Failed to retrieve payment from Firestore: {e}")
+            return None

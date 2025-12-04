@@ -16,5 +16,14 @@
       "description": "Make restaurant reservations",
       "service_path_template": "/reservations"
     }
+  },
+  "4436305b-45ec-40ef-afe0-acf6a4c0a8e6": {
+    "service_id": "4436305b-45ec-40ef-afe0-acf6a4c0a8e6",
+    "provider_agent_id": "4436305b-45ec-40ef-afe0-acf6a4c0a8e6",
+    "metadata": {
+      "name": "Le Petit Bistro Restaurant Service",
+      "description": "Restaurant booking for Le Petit Bistro",
+      "service_path_template": "/chat"
+    }
   }
 }
