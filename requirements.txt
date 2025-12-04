@@ -7,3 +7,6 @@ pydantic>=2.0.0
 
 # MCP (Model Context Protocol) Support
 aiohttp>=3.9.0
+
+# Production dependencies
+gevent>=23.9.0
