@@ -600,7 +600,7 @@ python3 run_mcp_wrappers.py filesystem
 ### 📚 Documentation
 
 - **[Complete Guide](docs/MCP_WRAPPER.md)** - Architecture, deployment, examples
-- **[SDK Integration](/Users/rgosselin/amorce_py_sdk/README.md#mcp-integration)** - Client usage
+- **[SDK Integration](https://github.com/trebortGolin/amorce_py_sdk#mcp-integration)** - Client usage
 - **[Console Docs](https://amorce.io/docs/guides/mcp-integration)** - UI integration
 - **[Test Results](tests/TEST_RESULTS.md)** - Comprehensive test evidence
 
