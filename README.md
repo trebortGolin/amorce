@@ -1,4 +1,4 @@
-# 🤖 Amorce - Agent Transaction Protocol Runtime
+# 🤖 Amorce Core (Runtime & Orchestrator)
 
 **The open-source runtime for secure AI agent-to-agent transactions.**
 
